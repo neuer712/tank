@@ -10,15 +10,39 @@
 ### 文件
 | 文件 | 作用 |
 |---|---|
-| `index.html` | 页面骨架（HTML），引用 `styles.css` 和 `app.js`，无构建步骤 |
+| `index.html` | 页面骨架（HTML + Alpine 模板指令），引用 `styles.css`、`app.js`、`alpine.min.js`，无构建步骤 |
 | `styles.css` | 全部样式 |
-| `app.js` | 全部逻辑：音频合成、物理、GPS、火炮架构、瞄准镜 |
+| `app.js` | 全部逻辑：音频合成、物理、GPS、火炮架构、瞄准镜，以及唯一的 Alpine store（`ui`） |
+| `alpine.min.js` | 本地保存的 Alpine.js 3.17.5（从 jsdelivr 下载后 vendor 进仓库，不走 CDN——保持"零外部依赖、离线也能跑"） |
 | `sounds/*.wav` | 录音引擎（`engine_idle/high/start/stop.wav`）、录音履带 `track.wav`、地面 `ground.wav` |
 | `sounds/halt/1-5.m4a`、`sounds/losfahren/1-5.m4a` | 用户自录的德语口令，随机播放 |
-| `build_standalone.py` | 把 `index.html` + `app.js` + `styles.css` 合并成一个文件，并把 `sounds/` 下的音频以 Base64 Data URI 嵌入，生成 `tank-standalone.html`（双击即可测试，不需要服务器） |
+| `build_standalone.py` | 把 `index.html` + `app.js` + `styles.css` + `alpine.min.js` 合并成一个文件，并把 `sounds/` 下的音频以 Base64 Data URI 嵌入，生成 `tank-standalone.html`（双击即可测试，不需要服务器） |
 | `_backup_recordings/`、`tank-standalone.html` | **不要提交到 git**（建议加进 `.gitignore`） |
 
-> GitHub Pages 是纯静态托管，`index.html` 引用外部 `app.js`/`styles.css` 完全没问题——拆文件只是为了让 `index.html` 别无限变长，不影响线上效果。`build_standalone.py` 负责在生成单文件测试版时把它们重新内联回去。
+> GitHub Pages 是纯静态托管，`index.html` 引用外部 `app.js`/`styles.css`/`alpine.min.js` 完全没问题——拆文件只是为了让 `index.html` 别无限变长，不影响线上效果。`build_standalone.py` 负责在生成单文件测试版时把它们重新内联回去。
+
+### 界面状态管理：Alpine.js（本地 vendor，非 CDN）
+在加了坦克/角色页面/驾驶员推杆之后，界面同步全靠手写 `$('id').textContent=...` / `classList.toggle(...)` /
+`document.querySelectorAll(...).forEach(...)` 已经出了好几个 bug（角色栏在顶部和瞄准镜里要分两处手动同步 `.on`
+状态，忘了同步一处就出问题）。现在改用 [Alpine.js](https://alpinejs.dev/) 的全局 store 收口：
+- `app.js` 里 `document.addEventListener('alpine:init', () => { ui = Alpine.store('ui', {...}); ... })` 注册唯一的
+  `ui` store，存了所有会变的界面状态（`activeRole`、`aiming`、`spd`/`rpm`/`gear` 等读数、`drv`、`gunsUi`、
+  `currentTankId`、`canSwitchTank` 等）和会被模板调用的方法（`setRole`/`selectTank`/`shiftTo`/`setZoom`/`setMode`/
+  `setManVal`/`refreshTankGate`）。物理/音频这些 plain function 不再直接碰 DOM，只管把结果写进 `ui.xxx`。
+- `index.html` 用 `x-text`/`x-show`/`:class`/`:disabled`/`x-for` 绑这个 store；角色栏、坦克栏、挡位、开火按钮、
+  变焦按钮全部由 `x-for` 按数组声明式渲染，不再手写 `createElement`/`innerHTML`（原来的 `buildTankNav()`/
+  `buildScopeButtons()`/`buildZoomButtons()`/`paintLever()` 都删掉了，角色栏的两处 `.on` 同步问题从架构上不可能
+  再发生——两处用的是同一个 `x-for` 模板 + 同一个 `$store.ui.activeRole`）。
+- **脚本加载顺序很关键，不能反**：`<script src="app.js" defer></script>` 必须排在 `<script src="alpine.min.js" defer></script>`
+  **前面**。Alpine 的 cdn 版本在自己的脚本执行完之后用 `queueMicrotask(() => Alpine.start())` 排队启动，`start()`
+  会同步触发 `alpine:init` 事件——如果 Alpine 的 `<script>` 先加载，`alpine:init` 会在 `app.js`（后加载的那个）
+  挂上监听器之前就已经触发完，store 永远注册不上。`build_standalone.py` 合并单文件版时也保持这个顺序（`js` 文本
+  在前，`alpine` 文本在后，拼进同一个 `<script>` 标签）。
+- `x-for` 绑的开火按钮用 `x-init="bindFireButton($el, slot.role)"` 在元素刚创建时挂上原有的 `bindPress()`
+  指针事件逻辑（保留了之前调好的多点触控 pid 隔离），不需要为了配合 Alpine 重写那套手势代码。
+- 这一步改动量很大、而且在这个环境里没有真实浏览器可以跑一遍验证——只做了语法检查（`node --check`）、
+  DOM id/`querySelector` 交叉核对、以及对着 `alpine.min.js` 源码尾部确认了启动时机的推断。**用户拿到手机上
+  实测后如果角色切换/坦克切换/推杆/开火按钮有问题，先怀疑这一轮的 Alpine 绑定。**
 
 ### 音频架构（Web Audio API）
 - `buildAudio()`：创建 `ctx`（AudioContext）→ `master`（GainNode，音量滑块）→ `comp`（DynamicsCompressor，threshold -14, ratio 4）→ destination。

@@ -4,66 +4,65 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
 <title>坦克驾驶模拟器</title>
-<link rel="stylesheet" href="styles.css?v=0.2.1">
+<link rel="stylesheet" href="styles.css?v=0.2.2">
 </head>
-<body>
+<body x-data>
   <div class="role-nav" id="roleNav">
-    <button class="role-btn on" data-role="overview">🚗<span>整车</span></button>
-    <button class="role-btn" data-role="commander" disabled>🎖️<span>车长</span></button>
-    <button class="role-btn" data-role="driver">🕹️<span>驾驶员</span></button>
-    <button class="role-btn" data-role="gunner">🎯<span>炮手</span></button>
-    <button class="role-btn" data-role="radio" disabled>📻<span>通讯兵</span></button>
-    <button class="role-btn" data-role="loader" disabled>📦<span>装填手</span></button>
+    <template x-for="r in $store.ui.ROLES" :key="r.id">
+      <button class="role-btn" :class="{on: $store.ui.activeRole === r.id}" :disabled="!r.enabled"
+              @click="$store.ui.setRole(r.id)">
+        <i x-text="r.icon"></i><span x-text="r.label"></span>
+      </button>
+    </template>
   </div>
 
   <h1>▲ 坦克驾驶模拟器 ▲ <small id="ver" style="opacity:.5;font-size:11px;letter-spacing:0;vertical-align:middle"></small></h1>
-  <div><span class="speed" id="spd">0</span> <span class="unit">km/h</span></div>
-  <div class="real">实际车速 <span id="realSpd">0</span> km/h<span id="motionTag"></span></div>
+  <div><span class="speed" x-text="$store.ui.spd">0</span> <span class="unit">km/h</span></div>
+  <div class="real">实际车速 <span x-text="$store.ui.realSpd">0</span> km/h<span x-text="$store.ui.motionTag"></span></div>
   <div class="row">
-    <div class="card"><small>档位</small><b id="gear">N</b></div>
-    <div class="card"><small>转速</small><b id="rpm">650</b></div>
-    <div class="card"><small>GPS</small><b id="acc">–</b></div>
+    <div class="card"><small>档位</small><b x-text="$store.ui.gear">N</b></div>
+    <div class="card"><small>转速</small><b x-text="$store.ui.rpm">650</b></div>
+    <div class="card"><small>GPS</small><b x-text="$store.ui.acc">–</b></div>
   </div>
 
-  <button id="start">启动引擎</button>
+  <button id="start" :disabled="$store.ui.startDisabled" x-show="!$store.ui.controlsVisible">启动引擎</button>
 
-  <div id="controls" class="hidden" style="width:100%;display:flex;flex-direction:column;align-items:center;gap:14px">
-    <div id="pageOverview" style="width:100%;display:flex;flex-direction:column;align-items:center;gap:14px">
+  <div id="controls" style="width:100%;display:flex;flex-direction:column;align-items:center;gap:14px"
+       x-show="$store.ui.controlsVisible">
+    <div x-show="$store.ui.activeRole === 'overview'" style="width:100%;display:flex;flex-direction:column;align-items:center;gap:14px">
       <div class="seg">
-        <button id="mGps" class="on">GPS 车速</button>
-        <button id="mMan">手动测试</button>
+        <button :class="{on: $store.ui.mode === 'gps'}" @click="$store.ui.setMode('gps')">GPS 车速</button>
+        <button :class="{on: $store.ui.mode === 'man'}" @click="$store.ui.setMode('man')">手动测试</button>
       </div>
-      <div id="manualBox" class="hidden">
-        <label>模拟实际车速：<span id="manVal">0</span> km/h</label>
-        <input type="range" id="man" min="0" max="120" value="0">
+      <div id="manualBox" x-show="$store.ui.mode === 'man'">
+        <label>模拟实际车速：<span x-text="$store.ui.manVal">0</span> km/h</label>
+        <input type="range" min="0" max="120" :value="$store.ui.manVal" @input="$store.ui.setManVal($event.target.value)">
       </div>
     </div>
 
-    <div id="pageDriver" class="hidden" style="width:100%;display:flex;flex-direction:column;align-items:center;gap:14px">
+    <div x-show="$store.ui.activeRole === 'driver'" style="width:100%;display:flex;flex-direction:column;align-items:center;gap:14px">
       <div class="cockpit">
         <div class="gear-stick">
-          <button class="gear-btn" data-gear="4">4</button>
-          <button class="gear-btn" data-gear="3">3</button>
-          <button class="gear-btn" data-gear="2">2</button>
-          <button class="gear-btn" data-gear="1">1</button>
-          <button class="gear-btn on" data-gear="0">N</button>
+          <template x-for="g in [4,3,2,1,0]" :key="g">
+            <button class="gear-btn" :class="{on: $store.ui.drv.gear === g}" @click="$store.ui.shiftTo(g)" x-text="g === 0 ? 'N' : g"></button>
+          </template>
         </div>
         <div class="lever-group">
           <div class="lever clutch" id="leverClutch">
-            <div class="lever-track"><div class="lever-handle"></div></div>
+            <div class="lever-track"><div class="lever-handle" :style="`top: calc(${$store.ui.drv.clutch * 100}% - ${$store.ui.drv.clutch * 42}px)`"></div></div>
             <label>离合</label>
           </div>
           <div class="lever brake" id="leverBrake">
-            <div class="lever-track"><div class="lever-handle"></div></div>
+            <div class="lever-track"><div class="lever-handle" :style="`top: calc(${$store.ui.drv.brake * 100}% - ${$store.ui.drv.brake * 42}px)`"></div></div>
             <label>刹车</label>
           </div>
           <div class="lever throttle" id="leverThrottle">
-            <div class="lever-track"><div class="lever-handle"></div></div>
+            <div class="lever-track"><div class="lever-handle" :style="`top: calc(${$store.ui.drv.throttle * 100}% - ${$store.ui.drv.throttle * 42}px)`"></div></div>
             <label>油门</label>
           </div>
         </div>
       </div>
-      <div class="scope-status" id="driverStatus"></div>
+      <div class="scope-status" x-text="$store.ui.driverStatusText"></div>
     </div>
 
     <div id="volBox">
@@ -72,35 +71,52 @@
     </div>
     <button id="stop" style="background:#333;color:#ccc;font-size:15px;padding:12px">熄火</button>
   </div>
-  <div id="status">点“启动引擎”后允许定位。保持屏幕常亮、本页在前台。</div>
+  <div id="status" x-text="$store.ui.statusText">点“启动引擎”后允许定位。保持屏幕常亮、本页在前台。</div>
 
-  <div class="tank-nav" id="tankNav"></div>
-  <div class="tank-nav-hint" id="tankNavHint"></div>
+  <div class="tank-nav" id="tankNav">
+    <template x-for="t in $store.ui.TANK_SLOTS" :key="t.id">
+      <button class="tank-slot" :class="{on: t.id === $store.ui.currentTankId}" :disabled="!$store.ui.canSwitchTank"
+              @click="$store.ui.selectTank(t.id)" x-text="t.label"></button>
+    </template>
+  </div>
+  <div class="tank-nav-hint" x-text="$store.ui.tankNavHint"></div>
 
-  <div id="scopeView" class="scope-overlay hidden">
+  <div id="scopeView" class="scope-overlay" x-show="$store.ui.aiming">
     <div class="scope-top">
       <div class="role-nav mini">
-        <button class="role-btn" data-role="overview">🚗<span>整车</span></button>
-        <button class="role-btn" data-role="commander" disabled>🎖️<span>车长</span></button>
-        <button class="role-btn" data-role="driver">🕹️<span>驾驶员</span></button>
-        <button class="role-btn on" data-role="gunner">🎯<span>炮手</span></button>
-        <button class="role-btn" data-role="radio" disabled>📻<span>通讯兵</span></button>
-        <button class="role-btn" data-role="loader" disabled>📦<span>装填手</span></button>
+        <template x-for="r in $store.ui.ROLES" :key="r.id">
+          <button class="role-btn" :class="{on: $store.ui.activeRole === r.id}" :disabled="!r.enabled"
+                  @click="$store.ui.setRole(r.id)">
+            <i x-text="r.icon"></i><span x-text="r.label"></span>
+          </button>
+        </template>
       </div>
-      <span id="scopeSysName">—</span>
+      <span x-text="$store.ui.scopeSysName">—</span>
     </div>
-    <div class="scope-zoom" id="scopeZoom"></div>
-    <div class="scope-stage" id="scopeStage">
+    <div class="scope-zoom" id="scopeZoom">
+      <template x-for="z in $store.ui.ZOOM_LEVELS" :key="z">
+        <button class="zoom-btn" :class="{on: z === $store.ui.zoomFactor}" @click="$store.ui.setZoom(z)" x-text="z + '×'"></button>
+      </template>
+    </div>
+    <div class="scope-stage" id="scopeStage" :style="`transform: ${$store.ui.scopeTransform}`">
       <div class="scope-circle">
         <video id="scopeVideo" autoplay playsinline muted></video>
         <canvas id="scopeCanvas"></canvas>
         <div class="scope-flash" id="scopeFlash"></div>
       </div>
     </div>
-    <div class="scope-status" id="scopeStatus"></div>
-    <div class="scope-bottom" id="scopeBottom"></div>
+    <div class="scope-status" x-text="$store.ui.scopeStatusText"></div>
+    <div class="scope-bottom" id="scopeBottom">
+      <template x-for="slot in $store.ui.gunsUi" :key="slot.role">
+        <button class="fire-btn" :class="{coax: slot.role === 'coax', reloading: slot.reloading}"
+                x-text="slot.label" x-init="bindFireButton($el, slot.role)"></button>
+      </template>
+    </div>
   </div>
 
-<script src="app.js?v=0.2.1"></script>
+<!-- app.js 必须先于 alpine.min.js 加载：它要先把 alpine:init 的监听器挂上，
+     Alpine 的 cdn 版脚本一执行就会同步触发 start()/alpine:init，顺序反了就注册不到 store。 -->
+<script src="app.js?v=0.2.2" defer></script>
+<script src="alpine.min.js" defer></script>
 </body>
 </html>
