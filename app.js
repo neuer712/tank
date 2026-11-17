@@ -1,6 +1,11 @@
 const $ = id => document.getElementById(id);
 const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
 
+// 页面上显示这个号，用来确认手机加载的是不是最新部署（而不是缓存的旧 app.js）。
+// 改完功能记得顺手改这里，同时把 index.html 里 app.js/styles.css 的 ?v= 也改成一样的号。
+const APP_VERSION = '0.0.2';
+const verEl = $('ver'); if (verEl) verEl.textContent = 'v' + APP_VERSION;
+
 // ================= tuning =================
 const SPEED_SCALE = 0.5;          // real 80 km/h -> tank 40 km/h
 const MAX_ACCEL   = 3;            // tank km/h per second; Infinity = no limit

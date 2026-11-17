@@ -25,8 +25,9 @@ for folder in ('halt', 'losfahren'):
                 embed[f'sounds/{folder}/{f}'] = uri(os.path.join(d, f))
 js = js.replace('const EMBED = {};', 'const EMBED = ' + json.dumps(embed) + ';', 1)
 
-html = html.replace('<link rel="stylesheet" href="styles.css">', f'<style>\n{css}</style>', 1)
-html = html.replace('<script src="app.js"></script>', f'<script>\n{js}</script>', 1)
+html, n1 = re.subn(r'<link rel="stylesheet" href="styles\.css(?:\?[^"]*)?">', f'<style>\n{css}</style>', html, count=1)
+html, n2 = re.subn(r'<script src="app\.js(?:\?[^"]*)?"></script>', f'<script>\n{js}</script>', html, count=1)
+assert n1 == 1 and n2 == 1, 'styles.css/app.js tag not found in index.html — did the markup change?'
 
 open('tank-standalone.html', 'w', encoding='utf-8').write(html)
 print(f'tank-standalone.html: {len(html)/1e6:.2f} MB, voice files embedded: {sorted(embed)}')
