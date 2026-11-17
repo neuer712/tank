@@ -34,7 +34,7 @@
 <body>
   <h1>▲ 坦克驾驶模拟器 ▲</h1>
   <div><span class="speed" id="spd">0</span> <span class="unit">km/h</span></div>
-  <div class="real">实际车速 <span id="realSpd">0</span> km/h</div>
+  <div class="real">实际车速 <span id="realSpd">0</span> km/h<span id="motionTag"></span></div>
   <div class="row">
     <div class="card"><small>档位</small><b id="gear">N</b></div>
     <div class="card"><small>转速</small><b id="rpm">650</b></div>
@@ -513,11 +513,11 @@ async function loadSfx() {
   }
 }
 
-function updateAudio(r) {
+function updateAudio(r, ld = load) {
   const now = ctx.currentTime;
   if (now >= engineReadyAt) {
     let rpm = 0;
-    for (const k in engines) if (engines[k]) rpm = engines[k].set(r, load, now, 0.08);
+    for (const k in engines) if (engines[k]) rpm = engines[k].set(r, ld, now, 0.08);
     $('rpm').textContent = Math.round(rpm / 10) * 10;
   }
   updateLoops(now, speedKmh);
@@ -707,6 +707,45 @@ function scheduleTrack(now, ahead, v) {
   } else if (v > 2 && Math.random() < 0.16 * ahead * trackFade(realKmh)) squeak(now);
 }
 
+// ================= accelerometer pre-rev =================
+// GPS lags 1-2 s at launch. If the phone feels the car start moving while GPS
+// still reads 0, slip the clutch a little: modest extra rpm, SOUND ONLY.
+const PREREV_THRESH = 0.5;        // m/s^2 smoothed linear acceleration = "car is moving off"
+const PREREV_CONFIRM = 0.25;      // s the acceleration must persist
+const PREREV_MAX_R = 0.15;        // extra rpm fraction at full pre-rev (~ +290 rpm)
+const PREREV_GIVEUP = 4;          // s: GPS still 0 after this -> phone was just handled, back off
+const PREREV_STOPPED = 1.5;       // s GPS must have read 0 (ignores the jolt of stopping)
+let accSmooth = 0, grav = null, motionSince = null, preRev = 0, startedAt = 0, motionSeen = false;
+function onMotion(e) {
+  let x, y, z;
+  const a = e.acceleration;
+  if (a && a.x != null) { x = a.x; y = a.y; z = a.z; }
+  else {                                   // no linear accel: remove gravity with a slow low-pass
+    const g = e.accelerationIncludingGravity;
+    if (!g || g.x == null) return;
+    if (!grav) grav = { x: g.x, y: g.y, z: g.z };
+    grav.x += (g.x - grav.x) * 0.02; grav.y += (g.y - grav.y) * 0.02; grav.z += (g.z - grav.z) * 0.02;
+    x = g.x - grav.x; y = g.y - grav.y; z = g.z - grav.z;
+  }
+  motionSeen = true;
+  accSmooth += (Math.hypot(x, y, z) - accSmooth) * 0.1;
+}
+function motionStep(nowS, dt) {
+  const stopped = realKmh === 0 && zeroSince !== null && nowS - zeroSince >= PREREV_STOPPED && nowS - startedAt > 2;
+  let want = 0;
+  if (stopped && accSmooth > PREREV_THRESH) {
+    if (motionSince === null) motionSince = nowS;
+    const held = nowS - motionSince;
+    if (held >= PREREV_CONFIRM && held < PREREV_GIVEUP) want = 1;
+  } else if (!stopped || accSmooth < PREREV_THRESH * 0.6) motionSince = null;
+  preRev += (want - preRev) * clamp(dt / (want > preRev ? 0.4 : 0.6), 0, 1);
+  if (preRev < 0.001) preRev = 0;
+  return preRev;
+}
+async function enableMotion(permission) {
+  try { if ((await permission) !== 'granted') return; window.addEventListener('devicemotion', onMotion); } catch (e) {}
+}
+
 // ================= voice lines =================
 function sayRandom(cat) {
   const list = voices[cat];
@@ -745,8 +784,13 @@ function loop() {
   $('gear').textContent = curGear === 0 ? 'N' : curGear;
   $('spd').textContent = Math.round(speedKmh);
   $('realSpd').textContent = Math.round(realKmh);
-  updateAudio(res.r);
-  checkVoiceEvents(performance.now() / 1000);
+  const nowS = performance.now() / 1000;
+  checkVoiceEvents(nowS);
+  const pr = motionStep(nowS, 0.05);
+  let sr = res.r, sl = load;
+  if (pr > 0) { sr = Math.max(sr, pr * PREREV_MAX_R); sl = Math.max(sl, 0.08 + pr * 0.3); }   // sound only
+  $('motionTag').textContent = pr > 0.3 ? ' · 体感起步' : '';
+  updateAudio(sr, sl);
 
   if (mode === 'gps' && lastFix && Date.now() - lastFix.wall > 6000) {
     $('status').textContent = 'GPS 信号丢失（隧道？）——保持上次车速';
@@ -792,6 +836,9 @@ document.addEventListener('visibilitychange', () => {
 
 // ================= UI =================
 $('start').onclick = async () => {
+  // iOS asks for motion permission; must be requested directly inside the tap
+  const motionPerm = (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function')
+    ? DeviceMotionEvent.requestPermission().catch(() => 'denied') : Promise.resolve('granted');
   $('start').disabled = true;
   if (!ctx) await buildAudio(); else await ctx.resume();
   running = true;
@@ -807,6 +854,8 @@ $('start').onclick = async () => {
   loopTimer = setInterval(loop, 50);
   schedTimer = setInterval(scheduleClanks, 25);
   startGps(); keepAwake();
+  startedAt = performance.now() / 1000;
+  enableMotion(motionPerm);
 };
 $('stop').onclick = () => {
   running = false;
