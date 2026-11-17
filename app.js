@@ -4,7 +4,7 @@ let ui;   // Alpine.store('ui', {...})，真正赋值在文件末尾的 alpine:i
 
 // 页面上显示这个号，用来确认手机加载的是不是最新部署（而不是缓存的旧 app.js）。
 // 改完功能记得顺手改这里，同时把 index.html 里 app.js/styles.css 的 ?v= 也改成一样的号。
-const APP_VERSION = '0.2.2';
+const APP_VERSION = '0.2.3';
 const verEl = $('ver'); if (verEl) verEl.textContent = 'v' + APP_VERSION;
 
 // ================= tuning =================
