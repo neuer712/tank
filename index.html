@@ -105,6 +105,9 @@ const HALT_SAY = 5;               // ...then "Halt" when it drops below this
 const GO_HOLD = 3;                // B = true after standing at 0 for this many seconds
 const GO_SAY = 5;                 // ...then "Losfahren" when speed reaches this
 const RADIO_FX = true;
+const RADIO_CLICK_GAIN = 0.35;     // push-to-talk click + squelch loudness
+const RADIO_KEYDOWN_DUR = 0.10;    // s of static after key-down click
+const RADIO_GAP = 0.02;           // s of silence between key-down static and the voice
 const TRACK_PHASES = 8;           // copies of the track loop, offset by 1/N of the link-hit period
 const TRACK_PERIOD = 0.2494;      // s, measured repeat period of link impacts in track.wav
 // slight per-copy speed differences so copies drift against each other:
@@ -747,6 +750,29 @@ async function enableMotion(permission) {
 }
 
 // ================= voice lines =================
+// Push-to-talk sound: sharp click + burst of band-limited static ("kssht").
+function radioKey(t, down) {
+  t = Math.max(t, ctx.currentTime);
+  const g0 = RADIO_CLICK_GAIN;
+  // click: very short broadband transient
+  const c = ctx.createBufferSource(); c.buffer = noiseBuf;
+  const cg = ctx.createGain();
+  cg.gain.setValueAtTime(0.0001, t);
+  cg.gain.exponentialRampToValueAtTime(g0 * 1.6, t + 0.001);
+  cg.gain.exponentialRampToValueAtTime(0.0001, t + 0.012);
+  c.connect(cg); cg.connect(master); c.start(t, Math.random()); c.stop(t + 0.03);
+  // static burst: key-down short, key-up longer fading squelch tail
+  const dur = down ? RADIO_KEYDOWN_DUR : 0.18;
+  const lvl = g0 * (down ? 1.5 : 1.1);
+  const n = ctx.createBufferSource(); n.buffer = noiseBuf;
+  const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 1800; bp.Q.value = 0.7;
+  const ng = ctx.createGain();
+  ng.gain.setValueAtTime(0.0001, t + 0.004);
+  ng.gain.exponentialRampToValueAtTime(lvl, t + 0.010);
+  ng.gain.setValueAtTime(lvl, t + dur * 0.6);
+  ng.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  n.connect(bp); bp.connect(ng); ng.connect(master); n.start(t, Math.random()); n.stop(t + dur + 0.02);
+}
 function sayRandom(cat) {
   const list = voices[cat];
   if (!list.length) return 0;
@@ -754,11 +780,12 @@ function sayRandom(cat) {
   if (list.length > 1 && i === lastVoice[cat]) i = (i + 1 + Math.floor(Math.random() * (list.length - 1))) % list.length;
   lastVoice[cat] = i;
   const b = list[i], now = ctx.currentTime;
+  const t0 = now + (RADIO_FX ? RADIO_KEYDOWN_DUR + RADIO_GAP : 0);   // voice only after key-down static has ended
   const s = ctx.createBufferSource(); s.buffer = b;
-  s.connect(voiceBus); s.start(now);
+  s.connect(voiceBus); s.start(t0);
   if (RADIO_FX) {
-    noiseHit(now, 0.03, 0.15, 'bandpass', 2500, 4);
-    noiseHit(now + b.duration, 0.03, 0.15, 'bandpass', 2500, 4);
+    radioKey(now, true);                       // key down
+    radioKey(t0 + b.duration, false);          // key up + squelch tail
   }
   if (window.onVoice) window.onVoice(cat, i + 1);
   return b.duration;
