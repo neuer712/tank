@@ -681,18 +681,32 @@ function buildScopeButtons() {
     bindFireButton(btn, slot.role);
   });
 }
+function stopFireTimer(role) { clearInterval(fireTimers[role]); fireTimers[role] = null; }
+function stopAllFireTimers() { for (const r in fireTimers) stopFireTimer(r); }
+// 手机浏览器长按容易把 pointerup/pointercancel 吞掉（iOS 的长按呼出菜单会抢走手势，
+// 或手指在小按钮上轻微滑动触发 pointerleave），导致连发定时器永远没人清掉。
+// 对策：pointerdown 时先清掉这门炮可能残留的旧定时器再开新的（防止事件丢失造成泄漏），
+// 用 setPointerCapture 把后续事件锁定在按钮上，并在 window 级别加一道兜底。
+window.addEventListener('pointerup', stopAllFireTimers);
+window.addEventListener('pointercancel', stopAllFireTimers);
+document.addEventListener('visibilitychange', () => { if (document.hidden) stopAllFireTimers(); });
+window.addEventListener('blur', stopAllFireTimers);
 function bindFireButton(el, role) {
   const fireOnce = () => tryFireGun(role, performance.now() / 1000);
   const start = () => {
+    stopFireTimer(role);          // never stack two intervals for the same gun
     fireOnce();
     const def = gunStates[role].def;
     if (def.fireMode === 'auto') fireTimers[role] = setInterval(fireOnce, 60000 / def.rpm);
   };
-  const stop = () => { clearInterval(fireTimers[role]); fireTimers[role] = null; };
-  el.addEventListener('pointerdown', e => { e.preventDefault(); start(); });
-  el.addEventListener('pointerup', stop);
-  el.addEventListener('pointerleave', stop);
-  el.addEventListener('pointercancel', stop);
+  el.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    try { el.setPointerCapture(e.pointerId); } catch (err) {}
+    start();
+  });
+  el.addEventListener('pointerup', () => stopFireTimer(role));
+  el.addEventListener('pointerleave', () => stopFireTimer(role));
+  el.addEventListener('pointercancel', () => stopFireTimer(role));
   el.addEventListener('contextmenu', e => e.preventDefault());
 }
 function updateGunStatusText() {
