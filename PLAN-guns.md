@@ -68,12 +68,23 @@ WeaponSystem（武器系统）────────────────�
 
 这样同一种炮（比如 MG34）可以被虎式和 Sd.Kfz.222 两个武器系统复用，不用重复定义参数；调整某一类炮的手感只需要改一处 `GUNS` 表。
 
-### 1.1 已实现：`GUNS` + `WEAPON_SYSTEMS`（`index.html`）
+再往上还有一层：
+
+```
+Tank（坦克）──────────────────────────────────────────────
+  玩家在底部坦克栏里选择的单位。只负责两件事：
+    · 固定一套声音（engine 取值 'sample'/'classic'/'cyl'，track 取值 'rec'/'v1'）——
+      玩家不能再单独切换引擎/履带声源，声音是这辆车的一部分
+    · 绑定恰好一个 WeaponSystem（不同 Tank 允许指向同一个 WeaponSystem，
+      架构上没问题，只是现在 7 辆车各用各的）
+```
+
+### 1.1 已实现：`GUNS` + `WEAPON_SYSTEMS` + `TANKS`（`app.js`）
 `GUNS` 对象定义了 12 种炮（`kwk30` 20mm 机关炮、`mg34`、`d10t` 100mm、`coaxMg` 7.62mm、`kwk36` 88mm、`kwk44_128` 128mm、`kwk44_75` 75mm 同轴炮、`amx120` 120mm 弹夹炮、`frMg` 7.5mm、`flak57` 57mm 高炮、`m3_75` 75mm、`m1919` .30cal），每个都带齐上面列的全部字段。
 
-`WEAPON_SYSTEMS` 对象把 7 个车型武器系统（`sdkfz222` / `type59` / `tiger` / `maus` / `amx50` / `twin57` / `sherman`）定义成「引用哪几个 `GUNS` 条目、各自的角色」，不重复定义参数。
+`WEAPON_SYSTEMS` 对象把 7 个武器系统（`sdkfz222` / `type59` / `tiger` / `maus` / `amx50` / `twin57` / `sherman`）定义成「引用哪几个 `GUNS` 条目、各自的角色」，外加一个 `reticle` 字段（瞄准镜图样名字，见 §2.2）。
 
-界面：驾驶页面顶部的 `<select id="weaponSel">` 选择武器系统（存 `localStorage('tankWeaponSys')`），选中后 `initWeaponSystem()` 重建每门炮的独立运行状态（`gunStates`：弹药、是否在装填、剩余装填时间）。
+`TANKS` 对象定义了 7 辆坦克，每辆都指向 `WEAPON_SYSTEMS` 里的一个条目，并固定了 `engine`/`track` 这套声音组合（7 辆车用了 6 种声音组合中的 5 种，两辆重复了一组——引擎只有 3 种合成方式、履带只有 2 种，7 辆车不够一一对应，重复的是能接受的）。页面底部 `#tankNav` 按 `TANK_SLOTS` 顺序列出全部 7 辆（59 式、Sd.Kfz.222 在最前面），点一下 `selectTank(id)`：切声音 bus、退出瞄准镜、重建这辆车武器系统的炮状态。
 
 ### 1.2 已实现：开炮/装填的运行时逻辑
 - `tryFireGun(role, now)`：检查该炮是否在装填 / 是否在夹内间隔冷却中 / 弹药是否耗尽，决定是否真正开火、是否立即进入装填、或进入夹内下一发冷却。
@@ -91,7 +102,7 @@ WeaponSystem（武器系统）────────────────�
 ## 第二部分：摄像头瞄准镜
 
 ### 2.1 已实现（基础 DEMO）
-- 驾驶页面新增“进入瞄准镜”按钮（`#enterScope`，在 `#controls` 里，引擎启动后才可见）。
+- 入口是顶部角色栏的"炮手"图标（不再是驾驶页面里的按钮）：`setRole('gunner')` 直接调用 `enterScope()`。退出瞄准镜（`#scopeExit`）会把角色切回"整车"。
 - `enterScope()`：显示全屏遮罩 `#scopeView`，调用 `getUserMedia({video:{facingMode:'environment'}})` 打开后置摄像头，画面接到 `<video>`；**不碰 `loopTimer` / `schedTimer` / `ctx`，驾驶时的引擎声、履带声、车长 Halt/Losfahren 口令继续播放**。
 - 圆形取景：`.scope-circle` 用 `border-radius:50%; overflow:hidden` 裁剪 `<video>`，上面叠加同样圆形裁剪的 `<canvas>` 画通用十字瞄准刻度（`drawReticle()`）——目前所有武器系统共用一套简单刻度，不区分炮种风格。
 - 开火按钮：`buildScopeButtons()` 按当前武器系统的 `guns` 列表动态生成按钮（主炮 / 同轴 / 炮2），`bindFireButton()` 处理 `pointerdown/up/leave/cancel`：单发/弹匣炮点一下开一炮，全自动炮按住连发（`setInterval` 按 `rpm` 调度），并阻止长按弹出系统菜单（`contextmenu`）。
@@ -100,19 +111,35 @@ WeaponSystem（武器系统）────────────────�
 - 等待装填：`updateGunStatusText()` 每帧刷新 `#scopeStatus` 文字（显示每门炮“装填中 N.Ns” 或 “弹药 x/y”），并给对应的开火按钮加 `.reloading` 样式（变暗）。
 - 退出：`exitScope()` 停掉摄像头 track、清掉连发定时器和震屏动画，回到驾驶页面。
 
-### 2.2 刻度线按炮种切换风格（未做）
-原计划：虎式/鼠式/Sd.Kfz.222 用德军 TZF 风格、59 式用苏式风格、谢尔曼用美式 M70、AMX 50 用法式简洁十字、双 57 用防空环形瞄准镜。目前 `drawReticle()` 只有一套通用十字+刻度，没有按 `weaponSysId` 切换绘制风格。做的话建议把 `drawReticle(cv)` 改成按武器系统 id 分发到不同绘制函数。
+### 2.2 刻度线按炮种切换风格（部分已做）
+`WEAPON_SYSTEMS[id].reticle` 存着每个武器系统自己的瞄准镜图样名字，`drawReticle(cv)` 按这个名字分发到 `drawReticleSoviet`/`drawReticleGerman`/`drawReticleGeneric`。已经做的两种风格：苏式倒 V 箭头+水平密位刻度（59 式）、德式 TZF 中央大三角+两侧小三角+外圈距离刻度（虎式/鼠式/Sd.Kfz.222）。AMX 50 / 双 57 / 谢尔曼目前还是退回通用十字瞄准镜（`drawReticleGeneric`），法式简洁十字和防空环形瞄准镜还没单独画。
 
-### 2.3 陀螺仪驱动的炮管“延迟跟随”（未做）
+### 2.3 陀螺仪驱动的炮管“延迟跟随”（未做；举镜取消误触发已做）
 `GUNS` 里每门炮已经有 `inertia` 字段（转动惯性，大口径数值小、转得慢），但还没有：
 - 监听 `DeviceOrientationEvent`/`DeviceMotionEvent.rotationRate`（iOS 需要在点击事件里同步 `requestPermission()`，写法同现有 `enableMotion()`）。
 - 画面角落画一截炮管轮廓，用临界阻尼弹簧 `x'' = ω²(target − x) − 2ω·x'` 跟随手机朝向，`ω` 直接取该炮的 `inertia` 值。
+
+已经做的是相关但更简单的一点：举手机瞄准时的晃动不该被现有的"体感起步预判"（§见 `motionStep()`）误判成"车子在动"从而把转速音效拉高。`enterScope()`/`exitScope()` 现在会把全局 `aiming` 置true/false，并清掉 `motionSince`/`preRev`；`loop()` 里 `aiming` 为真时直接把 `pr` 记 0，不读 `motionStep()` 的结果。
 
 ### 2.4 开炮后坐的炮管位移（部分未做）
 目前只有整体震屏 + 闪光，没有做“炮管沿自身轴线后退再复进”的独立位移动画（原计划里炮管单独后坐、带轻微过冲）。`recoil.kick` 字段已经预留，还没被消费。
 
 ### 2.5 安全
 瞄准视图里没有任何需要驾驶员操作的东西；仍建议提示“请由乘客操作”（未实现，可在 `enterScope()` 里首次进入时加一次 `alert`/toast）。
+
+---
+
+## 第三部分：乘员角色页面
+
+### 3.1 已实现
+顶部 `#roleNav` 六个图标，在所有页面都显示：整车 / 车长 / 驾驶员 / 炮手 / 通讯兵 / 装填手。目前做了三个能点的角色（整车、驾驶员、炮手），车长/通讯兵/装填手三个按钮带 `disabled`，纯占位（样式变暗，点不动）。
+
+- **整车**（`#pageOverview`，默认页面）：现有的驾驶模拟——GPS/手动滑块控制车速，`physicsStep()` 自动换挡，车速触发车长 Halt/Losfahren 口令。
+- **驾驶员**（`#pageDriver`）：真正手动开车。油门/刹车/离合三个踏板（按住生效、松手停止，复用开火按钮那套 `bindPress()` 健壮处理），N/1/2/3/4 挡位按钮（不踩离合器直接点挡位会"打齿轮"，播放 `grindGears()` 噪声并拒绝换挡）。`driverPhysicsStep()` 替代 `physicsStep()`：车速只由油门/刹车推动，转速离合时自由升降、结合时跟车速走；GPS/手动滑块、车长语音在这个页面都不生效。离开驾驶员页面（切回整车或点别的角色）立刻改回调用 `physicsStep()`，行驶声音回到默认（GPS/手动）模式。
+- **炮手**：就是第二部分做的瞄准镜/开炮界面，`setRole('gunner')` 直接调 `enterScope()`，不再是整车页面里单独一个按钮。退出瞄准镜会把角色切回整车（`exitScope()` 里判断 `activeRole === 'gunner'` 才切，避免切坦克时防御性调用 `exitScope()` 误把驾驶员页面打断）。
+
+### 3.2 还没做
+车长、通讯兵、装填手三个角色页面内容。车长可能对应现有的 Halt/Losfahren 口令触发逻辑（现在是自动触发，车长角色也许是让玩家手动按按钮喊话）；装填手可能是把 §1 的装填倒计时做成一个需要玩家主动操作的小游戏，而不是自动计时。这些现在都只是猜测，具体怎么做需要和用户再对一下。
 
 ---
 

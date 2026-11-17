@@ -3,7 +3,7 @@ const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
 
 // 页面上显示这个号，用来确认手机加载的是不是最新部署（而不是缓存的旧 app.js）。
 // 改完功能记得顺手改这里，同时把 index.html 里 app.js/styles.css 的 ?v= 也改成一样的号。
-const APP_VERSION = '0.0.2';
+const APP_VERSION = '0.1.0';
 const verEl = $('ver'); if (verEl) verEl.textContent = 'v' + APP_VERSION;
 
 // ================= tuning =================
@@ -278,12 +278,12 @@ function createClassicEngine(ctx, dest) {
 // ENGINE-END
 
 // ================= state =================
-let engineMode = 'sample'; try { engineMode = localStorage.getItem('tankEngine2') || 'sample'; } catch (e) {}
+let engineMode = 'sample';    // 由当前选中的坦克(TANKS)决定，玩家不再单独切换声音源
 let ctx, master, comp, noiseBuf, engines = {}, engBus = {}, roll = {}, trackBus, voiceBus, trackLoop = null;
 let running = false, mode = 'gps', engineReadyAt = 0;
 let realKmh = 0, speedKmh = 0, prevSpeed = 0, throttle = 0, load = 0.08, shiftUntil = 0;
 let lastFix = null, watchId = null, wakeLock = null;
-let trackMode = 'rec'; try { trackMode = localStorage.getItem('tankTrack3') || 'rec'; } catch (e) {}
+let trackMode = 'rec';        // 同上，由坦克决定
 let groundLoop = null;
 let trk = null, nextSqueal = 0;
 let curGear = 0, nextClank = 0, schedTimer = null, loopTimer = null;
@@ -562,16 +562,54 @@ const GUNS = {
                reloadSound:'belt', inertia:9.0, recoil:{shake:.06, flash:.06, kick:.03} },
 };
 const WEAPON_SYSTEMS = {
-  sdkfz222: { label:'Sd.Kfz.222（国军版）', guns:[{role:'main',  gun:'kwk30'},     {role:'coax', gun:'mg34'}] },
-  type59:   { label:'59 式',                guns:[{role:'main',  gun:'d10t'},      {role:'coax', gun:'coaxMg'}] },
-  tiger:    { label:'虎式',                  guns:[{role:'main',  gun:'kwk36'},     {role:'coax', gun:'mg34'}] },
-  maus:     { label:'鼠式',                  guns:[{role:'main',  gun:'kwk44_128'}, {role:'coax', gun:'kwk44_75'}] },
-  amx50:    { label:'AMX 50 120',            guns:[{role:'main',  gun:'amx120'},    {role:'coax', gun:'frMg'}] },
-  twin57:   { label:'双 57 自行高炮',         guns:[{role:'main',  gun:'flak57'},    {role:'main2', gun:'flak57'}] },
-  sherman:  { label:'谢尔曼',                guns:[{role:'main',  gun:'m3_75'},     {role:'coax', gun:'m1919'}] },
+  sdkfz222: { label:'Sd.Kfz.222（国军版）', reticle:'german', guns:[{role:'main',  gun:'kwk30'},     {role:'coax', gun:'mg34'}] },
+  type59:   { label:'59 式',                reticle:'soviet', guns:[{role:'main',  gun:'d10t'},      {role:'coax', gun:'coaxMg'}] },
+  tiger:    { label:'虎式',                  reticle:'german', guns:[{role:'main',  gun:'kwk36'},     {role:'coax', gun:'mg34'}] },
+  maus:     { label:'鼠式',                  reticle:'german', guns:[{role:'main',  gun:'kwk44_128'}, {role:'coax', gun:'kwk44_75'}] },
+  amx50:    { label:'AMX 50 120',            reticle:'generic', guns:[{role:'main',  gun:'amx120'},    {role:'coax', gun:'frMg'}] },
+  twin57:   { label:'双 57 自行高炮',         reticle:'generic', guns:[{role:'main',  gun:'flak57'},    {role:'main2', gun:'flak57'}] },
+  sherman:  { label:'谢尔曼',                reticle:'generic', guns:[{role:'main',  gun:'m3_75'},     {role:'coax', gun:'m1919'}] },
 };
-let weaponSysId = 'type59'; try { weaponSysId = localStorage.getItem('tankWeaponSys') || weaponSysId; } catch (e) {}
+let weaponSysId = null;
 let gunStates = {}, shakeAmp = 0;
+
+// ================= Tank（坦克）=================
+// Tank -(包含)- WeaponSystem -(包含)- Gun 的面向对象设计里，Tank 这一层只负责两件事：
+// 固定一套声音（发动机 + 履带，玩家不能再单独切换）、以及绑定恰好一个武器系统
+// （不同坦克允许指向同一个武器系统，架构上没问题，只是现在 7 辆车各用各的）。
+const TANKS = {
+  type59:   { label:'59 式',     weaponSystem:'type59',   engine:'sample',  track:'rec' },
+  sdkfz222: { label:'SdKfz 222', weaponSystem:'sdkfz222', engine:'sample',  track:'v1'  },
+  tiger:    { label:'虎式',       weaponSystem:'tiger',    engine:'cyl',     track:'rec' },
+  maus:     { label:'鼠式',       weaponSystem:'maus',     engine:'cyl',     track:'v1'  },
+  amx50:    { label:'AMX 50',    weaponSystem:'amx50',    engine:'classic', track:'rec' },
+  twin57:   { label:'双 57 AA',  weaponSystem:'twin57',   engine:'sample',  track:'rec' },
+  sherman:  { label:'谢尔曼',     weaponSystem:'sherman',  engine:'classic', track:'v1'  },
+};
+const TANK_SLOTS = ['type59', 'sdkfz222', 'tiger', 'maus', 'amx50', 'twin57', 'sherman'];   // 底部坦克切换栏的顺序
+let currentTankId = 'type59'; try { currentTankId = localStorage.getItem('tankId') || currentTankId; } catch (e) {}
+
+function selectTank(id) {
+  const t = TANKS[id]; if (!t) return;
+  currentTankId = id;
+  try { localStorage.setItem('tankId', id); } catch (e) {}
+  setEngineMode(t.engine);
+  setTrackMode(t.track);
+  exitScope();
+  initWeaponSystem(t.weaponSystem);
+  buildTankNav();
+}
+function buildTankNav() {
+  const box = $('tankNav'); if (!box) return;
+  box.innerHTML = '';
+  TANK_SLOTS.forEach(id => {
+    const btn = document.createElement('button');
+    btn.className = 'tank-slot' + (id === currentTankId ? ' on' : '');
+    btn.textContent = TANKS[id].label;
+    btn.onclick = () => selectTank(id);
+    box.appendChild(btn);
+  });
+}
 
 function initWeaponSystem(id) {
   const sys = WEAPON_SYSTEMS[id]; if (!sys) return;
@@ -590,6 +628,7 @@ function initWeaponSystem(id) {
 }
 
 function tryFireGun(role, now) {
+  if (!ctx) return false;   // 还没启动引擎（炮手图标在首页就能点，摄像头不需要 ctx，但开炮声音需要）
   const g = gunStates[role];
   if (!g || g.reloading || now < g.nextShotAt) return false;
   if (g.ammo <= 0) { startReload(role); return false; }
@@ -659,7 +698,7 @@ function playReloadSound(def) {
 }
 function triggerRecoilFX(recoil) {
   shakeAmp = Math.max(shakeAmp, recoil.shake);
-  if (!$('scopeView').classList.contains('hidden')) flashScope(recoil.flash);
+  if (aiming) flashScope(recoil.flash);
 }
 function flashScope(intensity) {
   const el = $('scopeFlash');
@@ -672,7 +711,7 @@ function flashScope(intensity) {
 }
 
 // ================= 瞄准镜 / 开炮界面（后置摄像头 DEMO） =================
-let scopeStream = null, scopeRAF = null, fireTimers = {};
+let scopeStream = null, scopeRAF = null, fireTimers = {}, aiming = false;
 function buildScopeButtons() {
   const box = $('scopeBottom'); if (!box) return;
   box.innerHTML = '';
@@ -689,30 +728,43 @@ function buildScopeButtons() {
 function stopFireTimer(role) { clearInterval(fireTimers[role]); fireTimers[role] = null; }
 function stopAllFireTimers() { for (const r in fireTimers) stopFireTimer(r); }
 // 手机浏览器长按容易把 pointerup/pointercancel 吞掉（iOS 的长按呼出菜单会抢走手势，
-// 或手指在小按钮上轻微滑动触发 pointerleave），导致连发定时器永远没人清掉。
-// 对策：pointerdown 时先清掉这门炮可能残留的旧定时器再开新的（防止事件丢失造成泄漏），
-// 用 setPointerCapture 把后续事件锁定在按钮上，并在 window 级别加一道兜底。
-window.addEventListener('pointerup', stopAllFireTimers);
-window.addEventListener('pointercancel', stopAllFireTimers);
-document.addEventListener('visibilitychange', () => { if (document.hidden) stopAllFireTimers(); });
-window.addEventListener('blur', stopAllFireTimers);
-function bindFireButton(el, role) {
-  const fireOnce = () => tryFireGun(role, performance.now() / 1000);
-  const start = () => {
-    stopFireTimer(role);          // never stack two intervals for the same gun
-    fireOnce();
-    const def = gunStates[role].def;
-    if (def.fireMode === 'auto') fireTimers[role] = setInterval(fireOnce, 60000 / def.rpm);
-  };
-  el.addEventListener('pointerdown', e => {
+// 或手指在小按钮上轻微滑动触发 pointerleave），导致连发定时器/踏板状态永远没人清掉。
+// bindPress() 是所有“按住生效、松手停止”控件（开火键、油门/刹车/离合器踏板）共用的
+// 健壮实现：pointerdown 时用 setPointerCapture 把后续事件锁死在按钮上，并把 end()
+// 注册进全局兜底列表——只要 window 收到任何 pointerup/pointercancel，或者页面切后台/
+// 失焦，所有正在按住的控件都会被强制松开，不会有漏掉释放事件导致“卡住”的情况。
+let pressFailsafes = [];
+function bindPress(el, onStart, onEnd) {
+  let active = false;
+  const start = e => {
     e.preventDefault();
     try { el.setPointerCapture(e.pointerId); } catch (err) {}
-    start();
-  });
-  el.addEventListener('pointerup', () => stopFireTimer(role));
-  el.addEventListener('pointerleave', () => stopFireTimer(role));
-  el.addEventListener('pointercancel', () => stopFireTimer(role));
+    if (!active) { active = true; onStart(); }
+  };
+  const end = () => { if (active) { active = false; onEnd(); } };
+  el.addEventListener('pointerdown', start);
+  el.addEventListener('pointerup', end);
+  el.addEventListener('pointerleave', end);
+  el.addEventListener('pointercancel', end);
   el.addEventListener('contextmenu', e => e.preventDefault());
+  pressFailsafes.push(end);
+}
+window.addEventListener('pointerup', () => pressFailsafes.forEach(f => f()));
+window.addEventListener('pointercancel', () => pressFailsafes.forEach(f => f()));
+window.addEventListener('blur', () => pressFailsafes.forEach(f => f()));
+document.addEventListener('visibilitychange', () => { if (document.hidden) pressFailsafes.forEach(f => f()); });
+
+function bindFireButton(el, role) {
+  const fireOnce = () => tryFireGun(role, performance.now() / 1000);
+  bindPress(el,
+    () => {
+      stopFireTimer(role);          // never stack two intervals for the same gun
+      fireOnce();
+      const def = gunStates[role].def;
+      if (def.fireMode === 'auto') fireTimers[role] = setInterval(fireOnce, 60000 / def.rpm);
+    },
+    () => stopFireTimer(role)
+  );
 }
 function updateGunStatusText() {
   const sys = WEAPON_SYSTEMS[weaponSysId]; if (!sys) return;
@@ -720,7 +772,7 @@ function updateGunStatusText() {
   if (box) sys.guns.forEach((slot, i) => {
     const btn = box.children[i]; if (btn) btn.classList.toggle('reloading', gunStates[slot.role].reloading);
   });
-  if ($('scopeView').classList.contains('hidden')) return;
+  if (!aiming) return;
   $('scopeStatus').textContent = sys.guns.map(slot => {
     const g = gunStates[slot.role];
     if (g.reloading) return `${g.def.label} 装填中 ${Math.max(0, g.reloadLeft).toFixed(1)}s`;
@@ -728,6 +780,10 @@ function updateGunStatusText() {
   }).join(' · ');
 }
 async function enterScope() {
+  activeRole = 'gunner';
+  document.querySelectorAll('.role-btn').forEach(b => b.classList.toggle('on', b.dataset.role === 'gunner'));
+  aiming = true;
+  motionSince = null; preRev = 0;   // 举手机瞄准时的晃动不该被当成”车辆起步”去推高转速
   $('scopeView').classList.remove('hidden');
   $('scopeStatus').textContent = '正在打开后置摄像头…';
   try {
@@ -740,13 +796,27 @@ async function enterScope() {
   scopeRAF = requestAnimationFrame(scopeFrame);
 }
 function exitScope() {
+  const wasAiming = aiming;
+  aiming = false;
+  motionSince = null; preRev = 0;
   $('scopeView').classList.add('hidden');
   if (scopeStream) { scopeStream.getTracks().forEach(tr => tr.stop()); scopeStream = null; }
-  for (const r in fireTimers) { clearInterval(fireTimers[r]); fireTimers[r] = null; }
+  stopAllFireTimers();
   if (scopeRAF) cancelAnimationFrame(scopeRAF); scopeRAF = null;
   $('scopeStage').style.transform = '';
+  // 只有真的在瞄准、且走的是"炮手"这条路进来的才需要把角色切回整车——
+  // selectTank() 切坦克时也会调用这个函数防御性地关相机，那时不该打断驾驶员页面。
+  if (wasAiming && activeRole === 'gunner') setRole('overview');
 }
+// 每个武器系统单独保存一种瞄准镜图样（WEAPON_SYSTEMS[id].reticle），这里按名字分发到
+// 对应的绘制函数；没有专门图样的武器系统退回到通用十字瞄准镜。
 function drawReticle(cv) {
+  const style = (WEAPON_SYSTEMS[weaponSysId] || {}).reticle;
+  if (style === 'soviet') drawReticleSoviet(cv);
+  else if (style === 'german') drawReticleGerman(cv);
+  else drawReticleGeneric(cv);
+}
+function drawReticleGeneric(cv) {
   const c = cv.getContext('2d'), w = cv.width, h = cv.height, cx = w / 2, cy = h / 2, r = Math.min(w, h) / 2;
   c.clearRect(0, 0, w, h);
   c.strokeStyle = 'rgba(80,255,120,.85)'; c.lineWidth = Math.max(1, w * 0.0025);
@@ -764,6 +834,44 @@ function drawReticle(cv) {
     c.beginPath(); c.moveTo(x1, y1); c.lineTo(x2, y2); c.stroke();
   }
 }
+// 苏式：中央倒 V 箭头 + 水平密位刻度（59 式）
+function drawReticleSoviet(cv) {
+  const c = cv.getContext('2d'), w = cv.width, h = cv.height, cx = w / 2, cy = h / 2, r = Math.min(w, h) / 2;
+  c.clearRect(0, 0, w, h);
+  c.strokeStyle = 'rgba(80,255,120,.9)'; c.lineWidth = Math.max(1, w * 0.0025);
+  c.beginPath();
+  c.moveTo(cx, cy - r * 0.08); c.lineTo(cx - r * 0.22, cy + r * 0.28);
+  c.moveTo(cx, cy - r * 0.08); c.lineTo(cx + r * 0.22, cy + r * 0.28);
+  c.moveTo(cx, cy - r * 0.85); c.lineTo(cx, cy - r * 0.08);
+  c.stroke();
+  for (let i = -6; i <= 6; i++) {
+    const x = cx + i * r * 0.1, tall = i % 3 === 0;
+    c.beginPath(); c.moveTo(x, cy + r * 0.45); c.lineTo(x, cy + r * 0.45 + (tall ? r * 0.08 : r * 0.04)); c.stroke();
+  }
+  c.beginPath(); c.moveTo(cx - r * 0.65, cy + r * 0.45); c.lineTo(cx + r * 0.65, cy + r * 0.45); c.stroke();
+}
+// 德式 TZF：中央大三角 + 两侧小三角 + 外圈距离刻度（虎式/鼠式/Sd.Kfz.222）
+function drawReticleGerman(cv) {
+  const c = cv.getContext('2d'), w = cv.width, h = cv.height, cx = w / 2, cy = h / 2, r = Math.min(w, h) / 2;
+  c.clearRect(0, 0, w, h);
+  c.strokeStyle = 'rgba(80,255,120,.9)'; c.fillStyle = 'rgba(80,255,120,.9)'; c.lineWidth = Math.max(1, w * 0.0025);
+  const triH = r * 0.22;
+  c.beginPath();
+  c.moveTo(cx, cy - triH); c.lineTo(cx - triH * 0.6, cy); c.lineTo(cx + triH * 0.6, cy);
+  c.closePath(); c.fill();
+  [-1, 1].forEach(side => {
+    const bx = cx + side * r * 0.5;
+    c.beginPath();
+    c.moveTo(bx, cy - triH * 0.5); c.lineTo(bx - triH * 0.3, cy); c.lineTo(bx + triH * 0.3, cy);
+    c.closePath(); c.fill();
+  });
+  for (let i = 0; i < 36; i++) {
+    const a = i / 36 * Math.PI * 2, tick = (i % 9 === 0) ? r * 0.07 : r * 0.03;
+    const x1 = cx + Math.cos(a) * (r * 0.94 - tick), y1 = cy + Math.sin(a) * (r * 0.94 - tick);
+    const x2 = cx + Math.cos(a) * r * 0.94, y2 = cy + Math.sin(a) * r * 0.94;
+    c.beginPath(); c.moveTo(x1, y1); c.lineTo(x2, y2); c.stroke();
+  }
+}
 function scopeFrame() {
   shakeAmp *= 0.86; if (shakeAmp < 0.01) shakeAmp = 0;
   $('scopeStage').style.transform = shakeAmp
@@ -775,22 +883,6 @@ function scopeFrame() {
   updateGunStatusText();
   scopeRAF = requestAnimationFrame(scopeFrame);
 }
-function buildWeaponSelect() {
-  const sel = $('weaponSel'); sel.innerHTML = '';
-  for (const id in WEAPON_SYSTEMS) {
-    const o = document.createElement('option'); o.value = id; o.textContent = WEAPON_SYSTEMS[id].label;
-    sel.appendChild(o);
-  }
-  sel.value = weaponSysId;
-  sel.onchange = () => {
-    exitScope();
-    try { localStorage.setItem('tankWeaponSys', sel.value); } catch (e) {}
-    initWeaponSystem(sel.value);
-  };
-}
-buildWeaponSelect();
-initWeaponSystem(weaponSysId);
-
 // ================= track synth v2 =================
 // Modal metal clank: each link impact rings a bank of inharmonic resonances.
 // Squeal: friction noise through very narrow resonances, gated per wheel turn.
@@ -969,25 +1061,88 @@ function checkVoiceEvents(nowS) {
   if (stateB && realKmh >= GO_SAY) { sayRandom('losfahren'); stateB = false; }
 }
 
+// ================= 驾驶员页面：手动油门/刹车/离合器/手动挂挡 =================
+// 整车(overview) 页面用 GPS/手动滑块模拟"自动驾驶"；驾驶员页面是真的在开——
+// 不挂挡、不给油就不会走，离合不分离换挡会打齿轮。离开驾驶员页面后，物理
+// 计算切回 physicsStep()，行驶声音回到默认（GPS/手动）模式。
+let activeRole = 'overview';
+let drv = { throttle: 0, brake: 0, clutch: false, gear: 0, throttleHeld: false, brakeHeld: false };
+function driverPhysicsStep(dt) {
+  drv.throttle += ((drv.throttleHeld ? 1 : 0) - drv.throttle) * clamp(dt / 0.15, 0, 1);
+  drv.brake    += ((drv.brakeHeld    ? 1 : 0) - drv.brake)    * clamp(dt / 0.10, 0, 1);
+  const engaged = !drv.clutch && drv.gear > 0;
+  if (engaged) {
+    const target = GEAR_TOP[drv.gear] * drv.throttle;
+    const accel = clamp((target - speedKmh) * 0.9, -MAX_ACCEL * 3, MAX_ACCEL);
+    speedKmh = Math.max(0, speedKmh + accel * dt);
+  }
+  speedKmh = Math.max(0, speedKmh - (drv.brake * 8 + 0.1) * dt);   // 刹车 + 滚动阻力，离合/空挡时也生效
+  curGear = drv.gear;
+
+  const demand = clamp(0.08 + drv.throttle * 0.92, 0, 1);
+  const rpmT = engaged
+    ? clamp(rpmIn(drv.gear, speedKmh, demand), IDLE_RPM, MAX_RPM)
+    : IDLE_RPM + drv.throttle * (MAX_RPM - IDLE_RPM) * 0.85;       // 空挡/踩离合：自由升转，不受车速牵制
+  engRpm += clamp(rpmT - engRpm, -RPM_FALL * dt, RPM_RISE * dt * (engaged ? 1 : 1.8));
+  load += (demand - load) * 0.15;
+  realKmh = speedKmh / SPEED_SCALE;   // 仅用于显示，驾驶员页面不读 GPS/陀螺仪
+  return { r: (engRpm - IDLE_RPM) / (MAX_RPM - IDLE_RPM), rpm: engRpm, shift: 0 };
+}
+function shiftTo(g) {
+  if (!ctx) return;
+  if (!drv.clutch) { grindGears(); return; }
+  if (g !== drv.gear) { drv.gear = g; gearShift(true); }
+  document.querySelectorAll('.gear-btn').forEach(b => b.classList.toggle('on', +b.dataset.gear === drv.gear));
+}
+function grindGears() {
+  if (!ctx) return;
+  const t = ctx.currentTime;
+  noiseHit(t, 0.18, 0.4, 'bandpass', 2200, 3);
+  noiseHit(t + 0.05, 0.15, 0.3, 'bandpass', 1500, 4);
+  $('driverStatus').textContent = '没踩离合器，挂不进挡！';
+}
+function updateDriverStatus() {
+  $('driverStatus').textContent =
+    `挡位 ${drv.gear === 0 ? 'N' : drv.gear} · 离合${drv.clutch ? '分离' : '结合'} · ` +
+    `油门 ${Math.round(drv.throttle * 100)}% · 刹车 ${Math.round(drv.brake * 100)}%`;
+}
+function setRole(r) {
+  if (r === 'gunner') { enterScope(); return; }   // 炮手 = 刚做好的瞄准镜/开炮界面
+  activeRole = r;
+  $('pageOverview').classList.toggle('hidden', r !== 'overview');
+  $('pageDriver').classList.toggle('hidden', r !== 'driver');
+  document.querySelectorAll('.role-btn').forEach(b => b.classList.toggle('on', b.dataset.role === r));
+  if (r !== 'driver') { drv.throttleHeld = false; drv.brakeHeld = false; drv.clutch = false; }
+}
+document.querySelectorAll('.role-btn').forEach(b => { if (!b.disabled) b.onclick = () => setRole(b.dataset.role); });
+bindPress($('pedThrottle'), () => { drv.throttleHeld = true; $('pedThrottle').classList.add('active'); },
+                             () => { drv.throttleHeld = false; $('pedThrottle').classList.remove('active'); });
+bindPress($('pedBrake'), () => { drv.brakeHeld = true; $('pedBrake').classList.add('active'); },
+                          () => { drv.brakeHeld = false; $('pedBrake').classList.remove('active'); });
+bindPress($('pedClutch'), () => { drv.clutch = true; $('pedClutch').classList.add('active'); },
+                           () => { drv.clutch = false; $('pedClutch').classList.remove('active'); });
+document.querySelectorAll('.gear-btn').forEach(b => b.onclick = () => shiftTo(+b.dataset.gear));
+
 // ================= schedulers =================
 function scheduleClanks() { scheduleTrack(ctx.currentTime, 0.12, speedKmh); }
 
 function loop() {
-  const res = physicsStep(realKmh, performance.now() / 1000);
+  const nowS = performance.now() / 1000;
+  const res = activeRole === 'driver' ? driverPhysicsStep(0.05) : physicsStep(realKmh, nowS);
   if (res.shift) gearShift(res.shift > 0);
   $('gear').textContent = curGear === 0 ? 'N' : curGear;
   $('spd').textContent = Math.round(speedKmh);
   $('realSpd').textContent = Math.round(realKmh);
-  const nowS = performance.now() / 1000;
-  checkVoiceEvents(nowS);
+  if (activeRole !== 'driver') checkVoiceEvents(nowS);   // 驾驶员页面是玩家自己开车，不触发车长语音
   updateGuns(0.05);
-  const pr = motionStep(nowS, 0.05);
+  const pr = aiming ? 0 : motionStep(nowS, 0.05);          // 举瞄准镜时不让晃动误触发"体感起步"升转
   let sr = res.r, sl = load;
   if (pr > 0) { sr = Math.max(sr, pr * PREREV_MAX_R); sl = Math.max(sl, 0.08 + pr * 0.3); }   // sound only
   $('motionTag').textContent = pr > 0.3 ? ' · 体感起步' : '';
   updateAudio(sr, sl);
+  if (activeRole === 'driver') updateDriverStatus();
 
-  if (mode === 'gps' && lastFix && Date.now() - lastFix.wall > 6000) {
+  if (activeRole !== 'driver' && mode === 'gps' && lastFix && Date.now() - lastFix.wall > 6000) {
     $('status').textContent = 'GPS 信号丢失（隧道？）——保持上次车速';
   }
 }
@@ -1064,31 +1219,19 @@ $('stop').onclick = () => {
   $('controls').classList.add('hidden');
   $('start').classList.remove('hidden');
 };
-$('enterScope').onclick = enterScope;
 $('scopeExit').onclick = exitScope;
+// 发动机/履带声音不再由玩家单独切换——固定由当前选中的坦克(TANKS)决定。
 function setEngineMode(m) {
   if (m === 'sample' && ctx && !engines.sample) m = 'classic';   // files missing
   engineMode = m;
-  try { localStorage.setItem('tankEngine2', m); } catch (e) {}
-  $('eSample').classList.toggle('on', m === 'sample');
-  $('eClassic').classList.toggle('on', m === 'classic');
-  $('eCyl').classList.toggle('on', m === 'cyl');
   if (ctx) for (const k in engBus) engBus[k].gain.setTargetAtTime(k === m ? 1 : 0, ctx.currentTime, 0.1);
 }
-$('eSample').onclick = () => setEngineMode('sample');
-$('eClassic').onclick = () => setEngineMode('classic');
-$('eCyl').onclick = () => setEngineMode('cyl');
-setEngineMode(engineMode);
-function setTrackMode(m) {
-  trackMode = m;
-  try { localStorage.setItem('tankTrack3', m); } catch (e) {}
-  $('tRec').classList.toggle('on', m === 'rec');
-  $('tV1').classList.toggle('on', m === 'v1');
-}
-$('tRec').onclick = () => setTrackMode('rec');
-$('tV1').onclick = () => setTrackMode('v1');
-setTrackMode(trackMode);
+function setTrackMode(m) { trackMode = m; }
 $('vol').oninput = e => master && master.gain.setTargetAtTime(e.target.value / 100, ctx.currentTime, 0.05);
 $('mGps').onclick = () => { mode = 'gps'; $('mGps').classList.add('on'); $('mMan').classList.remove('on'); $('manualBox').classList.add('hidden'); };
 $('mMan').onclick = () => { mode = 'man'; $('mMan').classList.add('on'); $('mGps').classList.remove('on'); $('manualBox').classList.remove('hidden'); realKmh = +$('man').value; };
 $('man').oninput = e => { $('manVal').textContent = e.target.value; if (mode === 'man') realKmh = +e.target.value; };
+
+// 到这里为止所有 let/const 顶层变量都已经执行过了，现在才真正选定初始坦克
+// （selectTank 会调用 exitScope()/initWeaponSystem()，提前调用会踩到还没初始化的变量）。
+selectTank(currentTankId);
