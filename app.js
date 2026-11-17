@@ -3,7 +3,7 @@ const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
 
 // 页面上显示这个号，用来确认手机加载的是不是最新部署（而不是缓存的旧 app.js）。
 // 改完功能记得顺手改这里，同时把 index.html 里 app.js/styles.css 的 ?v= 也改成一样的号。
-const APP_VERSION = '0.2.0';
+const APP_VERSION = '0.2.1';
 const verEl = $('ver'); if (verEl) verEl.textContent = 'v' + APP_VERSION;
 
 // ================= tuning =================
@@ -281,6 +281,7 @@ function createClassicEngine(ctx, dest) {
 let engineMode = 'sample';    // 由当前选中的坦克(TANKS)决定，玩家不再单独切换声音源
 let ctx, master, comp, noiseBuf, engines = {}, engBus = {}, roll = {}, trackBus, voiceBus, trackLoop = null;
 let running = false, mode = 'gps', engineReadyAt = 0;
+let engineAudioOn = false;   // 发动机音轨是否该出声——和"音频系统建好了没"是两件事，见 ensureAudio()
 let realKmh = 0, speedKmh = 0, prevSpeed = 0, throttle = 0, load = 0.08, shiftUntil = 0;
 let lastFix = null, watchId = null, wakeLock = null;
 let trackMode = 'rec';        // 同上，由坦克决定
@@ -395,6 +396,16 @@ async function buildAudio() {
     const sh = ctx.createWaveShaper(); sh.curve = shaperCurve(1.8);
     voiceBus.connect(hp); hp.connect(lp); lp.connect(sh); sh.connect(master);
   } else voiceBus.connect(master);
+}
+
+// 开炮/装填不应该依赖"引擎有没有启动"——两者是两套独立的系统：引擎声音轨
+// （发动机/履带/口令）归 $('start') 管，而音频上下文本身（ctx/master，开炮声
+// 要用）谁先用到就该谁建起来。炮手进瞄准镜、或者启动引擎，都会走这一个
+// 函数，建好了就不会重建，只会 resume 一下 + 按音量滑块把 master 音量带上去。
+async function ensureAudio() {
+  if (!ctx) await buildAudio();
+  else if (ctx.state === 'suspended') await ctx.resume();
+  master.gain.setTargetAtTime($('vol').value / 100, ctx.currentTime, 0.05);
 }
 
 // Load one audio file (embedded data URI or URL). Returns AudioBuffer or null.
@@ -796,6 +807,7 @@ const ZOOM_LEVELS = [1, 2.5, 5];
 let zoomFactor = 1;
 async function enterScope() {
   if (aiming) return;   // 顶部迷你角色栏里再点一下炮手图标，不用重新开一次摄像头
+  await ensureAudio();   // 开炮不该依赖"有没有启动引擎"：炮手一进来就把音频系统建好/唤醒
   activeRole = 'gunner';
   document.querySelectorAll('.role-btn').forEach(b => b.classList.toggle('on', b.dataset.role === 'gunner'));
   aiming = true;
@@ -1122,19 +1134,36 @@ function checkVoiceEvents(nowS) {
 // 让它停在原地至少还能完成换挡）。油门/刹车不管支不支持多点触控，松手都
 // 立刻回零——它们不需要"保持"。
 const MULTITOUCH = (navigator.maxTouchPoints || 0) >= 2;
+const DRIVER_RPM_FALL = 700;     // 坦克发动机飞轮重，松油门转速掉得比自动模式(RPM_FALL)慢得多
+const CLUTCH_FLOOR_THRESH = 0.8; // 推杆值 >= 这个才算"踩到底"
+const CLUTCH_FLOOR_HOLD = 1.0;   // s：踩到底松手后，先停在原地这么久再回位，留时间挂挡
+const LUG_FLOOR = IDLE_RPM * 0.25;   // 发动机快熄火了也不让转速真掉到 0，否则没法恢复
 let activeRole = 'overview';
-let drv = { throttle: 0, brake: 0, clutch: 0, gear: 0, throttleTarget: 0, brakeTarget: 0, clutchTarget: 0, clutchReleasing: false };
+let drv = { throttle: 0, brake: 0, clutch: 0, gear: 0, throttleTarget: 0, brakeTarget: 0, clutchTarget: 0, clutchReleasing: false, clutchHoldUntil: 0 };
+let nextChug = 0;
 function driverPhysicsStep(dt) {
   drv.throttle += (drv.throttleTarget - drv.throttle) * clamp(dt / 0.05, 0, 1);
   drv.brake    += (drv.brakeTarget    - drv.brake)    * clamp(dt / 0.05, 0, 1);
-  const clutchTc = drv.clutchReleasing ? 0.6 : 0.03;      // 缓慢抬起 vs 跟手指走
-  drv.clutch += (drv.clutchTarget - drv.clutch) * clamp(dt / clutchTc, 0, 1);
-  if (drv.clutchReleasing && Math.abs(drv.clutch - drv.clutchTarget) < 0.01) drv.clutchReleasing = false;
+
+  const nowS = performance.now() / 1000;
+  if (drv.clutchHoldUntil && nowS < drv.clutchHoldUntil) {
+    // 踩到底刚松手：原地停着不回位，留时间挂挡
+  } else {
+    if (drv.clutchHoldUntil) { drv.clutchHoldUntil = 0; drv.clutchTarget = 0; drv.clutchReleasing = true; }
+    const clutchTc = drv.clutchReleasing ? 0.6 : 0.03;      // 缓慢抬起 vs 跟手指走
+    drv.clutch += (drv.clutchTarget - drv.clutch) * clamp(dt / clutchTc, 0, 1);
+    if (drv.clutchReleasing && Math.abs(drv.clutch - drv.clutchTarget) < 0.01) drv.clutchReleasing = false;
+  }
 
   const engaged = drv.clutch < 0.5 && drv.gear > 0;
+  // 离合结合、挡位挂太高、车速又太低时，发动机被车轮硬拖着转，转速会被拖到怠速以下——
+  // 真实车这时候是在"闷车"：动力骤减、发出吭哧吭哧的闯动声，而不是顺畅地继续加速。
+  const impliedRpm = engaged ? clamp(speedKmh / GEAR_TOP[drv.gear] * MAX_RPM, LUG_FLOOR, MAX_RPM) : null;
+  const lugging = engaged && impliedRpm < IDLE_RPM * 0.92;
+  const torque = lugging ? clamp(impliedRpm / IDLE_RPM, 0.12, 1) : 1;
   if (engaged) {
     const target = GEAR_TOP[drv.gear] * drv.throttle;
-    const accel = clamp((target - speedKmh) * 0.9, -MAX_ACCEL * 3, MAX_ACCEL);
+    const accel = clamp((target - speedKmh) * 0.9 * torque, -MAX_ACCEL * 3, MAX_ACCEL * torque);
     speedKmh = Math.max(0, speedKmh + accel * dt);
   }
   speedKmh = Math.max(0, speedKmh - (drv.brake * 8 + 0.1) * dt);   // 刹车 + 滚动阻力，离合/空挡时也生效
@@ -1142,12 +1171,22 @@ function driverPhysicsStep(dt) {
 
   const demand = clamp(0.08 + drv.throttle * 0.92, 0, 1);
   const rpmT = engaged
-    ? clamp(rpmIn(drv.gear, speedKmh, demand), IDLE_RPM, MAX_RPM)
+    ? impliedRpm
     : IDLE_RPM + drv.throttle * (MAX_RPM - IDLE_RPM) * 0.85;       // 空挡/踩离合：自由升转，不受车速牵制
-  engRpm += clamp(rpmT - engRpm, -RPM_FALL * dt, RPM_RISE * dt * (engaged ? 1 : 1.8));
+  engRpm += clamp(rpmT - engRpm, -DRIVER_RPM_FALL * dt, RPM_RISE * dt * (engaged ? 1 : 1.8));
   load += (demand - load) * 0.15;
   realKmh = speedKmh / SPEED_SCALE;   // 仅用于显示，驾驶员页面不读 GPS/陀螺仪
-  return { r: (engRpm - IDLE_RPM) / (MAX_RPM - IDLE_RPM), rpm: engRpm, shift: 0 };
+
+  if (lugging && ctx && nowS >= nextChug) {
+    chugSound(ctx.currentTime);
+    nextChug = nowS + 0.16 + Math.random() * 0.08;
+  }
+  drv.lugging = lugging;
+  return { r: clamp((engRpm - IDLE_RPM) / (MAX_RPM - IDLE_RPM), -0.3, 1), rpm: engRpm, shift: 0 };
+}
+function chugSound(t) {   // 闷车时的吭哧声：短促的低频闷响 + 一点点噪声
+  thump(t, 55, 28, 0.12, 0.35);
+  noiseHit(t, 0.1, 0.3, 'lowpass', 220, 2);
 }
 function shiftTo(g) {
   if (!ctx) return;
@@ -1165,7 +1204,8 @@ function grindGears() {
 function updateDriverStatus() {
   $('driverStatus').textContent =
     `挡位 ${drv.gear === 0 ? 'N' : drv.gear} · 离合 ${Math.round(drv.clutch * 100)}% · ` +
-    `油门 ${Math.round(drv.throttle * 100)}% · 刹车 ${Math.round(drv.brake * 100)}%`;
+    `油门 ${Math.round(drv.throttle * 100)}% · 刹车 ${Math.round(drv.brake * 100)}%` +
+    (drv.lugging ? ' · 闷车了，先降挡或踩离合' : '');
   paintLever('leverClutch', drv.clutch);
   paintLever('leverBrake', drv.brake);
   paintLever('leverThrottle', drv.throttle);
@@ -1208,6 +1248,7 @@ function setRole(r) {
   $('pageDriver').classList.toggle('hidden', r !== 'driver');
   document.querySelectorAll('.role-btn').forEach(b => b.classList.toggle('on', b.dataset.role === r));
   if (r !== 'driver') { drv.throttleTarget = 0; drv.brakeTarget = 0; drv.clutchTarget = 0; drv.clutchReleasing = false; }
+  if (r === 'driver') { motionSince = null; preRev = 0; }   // 驾驶员页面转速完全交给油门推杆，别留着体感起步的残留状态
   buildTankNav();   // 只有整车+熄火才能换坦克，角色一变就重新算一下按钮能不能点
 }
 document.querySelectorAll('.role-btn').forEach(b => { if (!b.disabled) b.onclick = () => setRole(b.dataset.role); });
@@ -1219,8 +1260,13 @@ bindLever(document.querySelector('#leverBrake .lever-track'),
   v => { drv.brakeTarget = v; paintLever('leverBrake', v); },
   () => { drv.brakeTarget = 0; });
 bindLever(document.querySelector('#leverClutch .lever-track'),
-  v => { drv.clutchTarget = v; drv.clutchReleasing = false; paintLever('leverClutch', v); },
-  () => { if (MULTITOUCH) { drv.clutchTarget = 0; drv.clutchReleasing = true; } });   // 不支持多点触控：保持在松手的位置
+  v => { drv.clutchTarget = v; drv.clutchReleasing = false; drv.clutchHoldUntil = 0; paintLever('leverClutch', v); },
+  () => {
+    // 踩到底松手：不管这台设备支不支持多点触控，都先停一秒方便换挡，再缓缓回位。
+    if (drv.clutchTarget >= CLUTCH_FLOOR_THRESH) drv.clutchHoldUntil = performance.now() / 1000 + CLUTCH_FLOOR_HOLD;
+    else if (MULTITOUCH) { drv.clutchTarget = 0; drv.clutchReleasing = true; }
+    // 没踩到底、又不支持多点触控：原地冻结，不然没法腾出手指挂挡
+  });
 
 // ================= schedulers =================
 function scheduleClanks() { scheduleTrack(ctx.currentTime, 0.12, speedKmh); }
@@ -1233,8 +1279,9 @@ function loop() {
   $('spd').textContent = Math.round(speedKmh);
   $('realSpd').textContent = Math.round(realKmh);
   if (activeRole !== 'driver') checkVoiceEvents(nowS);   // 驾驶员页面是玩家自己开车，不触发车长语音
-  updateGuns(0.05);
-  const pr = aiming ? 0 : motionStep(nowS, 0.05);          // 举瞄准镜时不让晃动误触发"体感起步"升转
+  // 炮手举着手机瞄准必然会晃；驾驶员页面转速已经由油门推杆直接控制——
+  // 这两个场景都要完全关掉"体感起步"升转效果，不能只靠"手机有没有在动"去判断。
+  const pr = (aiming || activeRole === 'driver') ? 0 : motionStep(nowS, 0.05);
   let sr = res.r, sl = load;
   if (pr > 0) { sr = Math.max(sr, pr * PREREV_MAX_R); sl = Math.max(sl, 0.08 + pr * 0.3); }   // sound only
   $('motionTag').textContent = pr > 0.3 ? ' · 体感起步' : '';
@@ -1289,11 +1336,11 @@ $('start').onclick = async () => {
   const motionPerm = (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function')
     ? DeviceMotionEvent.requestPermission().catch(() => 'denied') : Promise.resolve('granted');
   $('start').disabled = true;
-  if (!ctx) await buildAudio(); else await ctx.resume();
+  await ensureAudio();
   running = true;
+  engineAudioOn = true;
+  setEngineMode(engineMode);   // 现在才真的把发动机轨道的增益拉上去
   const t = ctx.currentTime + 0.05;
-  master.gain.cancelScheduledValues(t);
-  master.gain.setValueAtTime($('vol').value / 100, t);
   if (engineMode !== 'sample') starterMotor(t);
   for (const k in engines) if (engines[k]) engines[k].crank(t);
   engineReadyAt = t + 2.2;
@@ -1309,6 +1356,8 @@ $('start').onclick = async () => {
 };
 $('stop').onclick = () => {
   running = false;
+  engineAudioOn = false;
+  setEngineMode(engineMode);   // 把发动机轨道的增益带回 0——开炮声音不受影响，走的是 master 不是 engBus
   clearInterval(loopTimer); clearInterval(schedTimer);
   if (watchId != null) navigator.geolocation.clearWatch(watchId);
   let tail = 0;
@@ -1321,10 +1370,12 @@ $('stop').onclick = () => {
   buildTankNav();   // 熄火了，坦克栏恢复能点（前提是当前还在整车页面）
 };
 // 发动机/履带声音不再由玩家单独切换——固定由当前选中的坦克(TANKS)决定。
+// engBus 的增益只在 engineAudioOn（真的按了"启动引擎"）时才拉到 1——否则光是
+// 炮手进瞄准镜触发 ensureAudio() 建好音频上下文，发动机轨道也会跟着漏声音出来。
 function setEngineMode(m) {
   if (m === 'sample' && ctx && !engines.sample) m = 'classic';   // files missing
   engineMode = m;
-  if (ctx) for (const k in engBus) engBus[k].gain.setTargetAtTime(k === m ? 1 : 0, ctx.currentTime, 0.1);
+  if (ctx) for (const k in engBus) engBus[k].gain.setTargetAtTime((engineAudioOn && k === m) ? 1 : 0, ctx.currentTime, 0.1);
 }
 function setTrackMode(m) { trackMode = m; }
 $('vol').oninput = e => master && master.gain.setTargetAtTime(e.target.value / 100, ctx.currentTime, 0.05);
@@ -1335,3 +1386,7 @@ $('man').oninput = e => { $('manVal').textContent = e.target.value; if (mode ===
 // 到这里为止所有 let/const 顶层变量都已经执行过了，现在才真正选定初始坦克
 // （selectTank 会调用 exitScope()/initWeaponSystem()，提前调用会踩到还没初始化的变量）。
 selectTank(currentTankId);
+
+// 装填倒计时必须和"引擎开没开"彻底无关：不依赖 loopTimer（只在按了"启动引擎"后才存在），
+// 单独开一个从页面加载就跑、一直跑到关页面的计时器。
+setInterval(() => updateGuns(0.05), 50);
