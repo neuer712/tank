@@ -102,14 +102,15 @@ Tank（坦克）─────────────────────�
 ## 第二部分：摄像头瞄准镜
 
 ### 2.1 已实现（基础 DEMO）
-- 入口是顶部角色栏的"炮手"图标（不再是驾驶页面里的按钮）：`setRole('gunner')` 直接调用 `enterScope()`。退出瞄准镜（`#scopeExit`）会把角色切回"整车"。
-- `enterScope()`：显示全屏遮罩 `#scopeView`，调用 `getUserMedia({video:{facingMode:'environment'}})` 打开后置摄像头，画面接到 `<video>`；**不碰 `loopTimer` / `schedTimer` / `ctx`，驾驶时的引擎声、履带声、车长 Halt/Losfahren 口令继续播放**。
-- 圆形取景：`.scope-circle` 用 `border-radius:50%; overflow:hidden` 裁剪 `<video>`，上面叠加同样圆形裁剪的 `<canvas>` 画通用十字瞄准刻度（`drawReticle()`）——目前所有武器系统共用一套简单刻度，不区分炮种风格。
-- 开火按钮：`buildScopeButtons()` 按当前武器系统的 `guns` 列表动态生成按钮（主炮 / 同轴 / 炮2），`bindFireButton()` 处理 `pointerdown/up/leave/cancel`：单发/弹匣炮点一下开一炮，全自动炮按住连发（`setInterval` 按 `rpm` 调度），并阻止长按弹出系统菜单（`contextmenu`）。
+- 入口是顶部角色栏的"炮手"图标（不再是驾驶页面里的按钮）：`setRole('gunner')` 直接调用 `enterScope()`。瞄准镜顶部不再是一个"退出瞄准镜"按钮，而是一份迷你角色栏（`.role-nav.mini`，和顶层角色栏共用 `.role-btn` 的事件绑定/高亮逻辑）——点"整车"或"驾驶员"就直接切过去，这本身就是退出瞄准镜的方式。离开炮手角色时统一走 `stopScopeHardware()`（关相机、停连发定时器、停震屏动画），不管是从迷你角色栏点走的（`setRole()` 里判断）还是 `selectTank()` 防御性调用的（`exitScope()`）。
+- `enterScope()`：显示全屏遮罩 `#scopeView`，调用 `getUserMedia({video:{facingMode:'environment'}})` 打开后置摄像头，画面接到 `<video>`；**不碰 `loopTimer` / `schedTimer` / `ctx`，驾驶时的引擎声、履带声、车长 Halt/Losfahren 口令继续播放**。已经在瞄准时再点一次炮手图标会直接 `return`，不会重新请求一次摄像头。
+- 圆形取景：`.scope-circle` 用 `border-radius:50%; overflow:hidden` 裁剪 `<video>`，上面叠加同样圆形裁剪的 `<canvas>` 画瞄准刻度（`drawReticle()`，见 §2.2）。
+- **变焦**：`#scopeZoom` 三个按钮 1×/2.5×/5×。`applyZoom()` 优先用相机硬件变焦（`MediaStreamTrack.getCapabilities().zoom`，目前主要是部分安卓 Chrome 支持），检测不到就退化成对 `<video>` 做 `transform:scale()` 的数码变焦（画质会打折但哪台设备都能用）。
+- 开火按钮：`buildScopeButtons()` 按当前武器系统的 `guns` 列表动态生成按钮（主炮 / 同轴 / 炮2），`bindFireButton()` 走 `bindPress()`（见下）实现按住连发。
 - 开炮震动：`fireShot()` → `triggerRecoilFX()` 把 `recoil.shake` 累加到全局 `shakeAmp`，`scopeFrame()`（`requestAnimationFrame` 循环）里按衰减系数 0.86/帧 做随机位移 + 轻微旋转的震屏，叠加在 `.scope-stage` 的 CSS `transform` 上。
 - 炮口闪光：`flashScope()` 把 `.scope-flash`（圆形径向渐变）的 `opacity` 瞬间拉高再做 CSS transition 淡出，强度随 `recoil.flash` 变化。
 - 等待装填：`updateGunStatusText()` 每帧刷新 `#scopeStatus` 文字（显示每门炮“装填中 N.Ns” 或 “弹药 x/y”），并给对应的开火按钮加 `.reloading` 样式（变暗）。
-- 退出：`exitScope()` 停掉摄像头 track、清掉连发定时器和震屏动画，回到驾驶页面。
+- **`bindPress(el, onStart, onEnd)`**：所有"按住生效、松手停止"按钮（目前是开火键）共用的健壮实现。按下时 `setPointerCapture` 并记住这次按下的 `pointerId`；松开/取消/切后台/失焦都会触发释放，但只有 `pointerId`匹配的那次松开才会真的停下来——这保证了多点触控下一个手指的操作不会牵连另一个手指正按着的控件（同一套 pid 隔离思路也用在了 §3 的离合器/油门/刹车推杆上，见 `bindLever()`）。
 
 ### 2.2 刻度线按炮种切换风格（部分已做）
 `WEAPON_SYSTEMS[id].reticle` 存着每个武器系统自己的瞄准镜图样名字，`drawReticle(cv)` 按这个名字分发到 `drawReticleSoviet`/`drawReticleGerman`/`drawReticleGeneric`。已经做的两种风格：苏式倒 V 箭头+水平密位刻度（59 式）、德式 TZF 中央大三角+两侧小三角+外圈距离刻度（虎式/鼠式/Sd.Kfz.222）。AMX 50 / 双 57 / 谢尔曼目前还是退回通用十字瞄准镜（`drawReticleGeneric`），法式简洁十字和防空环形瞄准镜还没单独画。
@@ -135,8 +136,16 @@ Tank（坦克）─────────────────────�
 顶部 `#roleNav` 六个图标，在所有页面都显示：整车 / 车长 / 驾驶员 / 炮手 / 通讯兵 / 装填手。目前做了三个能点的角色（整车、驾驶员、炮手），车长/通讯兵/装填手三个按钮带 `disabled`，纯占位（样式变暗，点不动）。
 
 - **整车**（`#pageOverview`，默认页面）：现有的驾驶模拟——GPS/手动滑块控制车速，`physicsStep()` 自动换挡，车速触发车长 Halt/Losfahren 口令。
-- **驾驶员**（`#pageDriver`）：真正手动开车。油门/刹车/离合三个踏板（按住生效、松手停止，复用开火按钮那套 `bindPress()` 健壮处理），N/1/2/3/4 挡位按钮（不踩离合器直接点挡位会"打齿轮"，播放 `grindGears()` 噪声并拒绝换挡）。`driverPhysicsStep()` 替代 `physicsStep()`：车速只由油门/刹车推动，转速离合时自由升降、结合时跟车速走；GPS/手动滑块、车长语音在这个页面都不生效。离开驾驶员页面（切回整车或点别的角色）立刻改回调用 `physicsStep()`，行驶声音回到默认（GPS/手动）模式。
-- **炮手**：就是第二部分做的瞄准镜/开炮界面，`setRole('gunner')` 直接调 `enterScope()`，不再是整车页面里单独一个按钮。退出瞄准镜会把角色切回整车（`exitScope()` 里判断 `activeRole === 'gunner'` 才切，避免切坦克时防御性调用 `exitScope()` 误把驾驶员页面打断）。
+- **驾驶员**（`#pageDriver`）：真正手动开车，布局是"左手挡杆、右手三个推杆"（`.cockpit` = `.gear-stick` + `.lever-group`，油门/刹车/离合从左到右排列，跟真车踏板顺序一致，只是立起来变成推杆）。
+  - 油门/刹车/离合不是开关，是 `bindLever()` 绑定的竖直推杆：在轨道 `.lever-track` 上按住/拖动，`(手指Y − 轨道顶) / 轨道高` 算出 0..1 的量，手柄 `.lever-handle` 跟着贴顶/贴底移动。
+  - **多点触控**：`bindLever` 用跟 `bindPress` 一样的 pid 隔离，一个手指拖油门不会影响另一个手指正按着的离合器——这是能一边踩离合一边挂挡的前提。`MULTITOUCH = navigator.maxTouchPoints >= 2` 判断设备到底支不支持：
+    - 支持：松开离合器推杆后 `drv.clutchReleasing=true`，`driverPhysicsStep()` 用一个慢得多的时间常数（0.6s vs 跟手指时的 0.03s）让它缓缓回到 0，而不是瞬间弹回。
+    - 不支持：松手什么都不做，离合器就停在松开瞬间的位置（单指设备没法一边按着离合一边去点挡位按钮，让它停住至少还能换挡）。
+    - 油门/刹车不分这两种情况，松手永远回零（`onRelease` 直接把 target 设成 0）。
+  - N/1/2/3/4 挡位按钮在 `.gear-stick` 里竖排（点一下挂挡，不是按住），不踩离合器（`drv.clutch < 0.5`）直接点挡位会"打齿轮"，播放 `grindGears()` 噪声并拒绝换挡。
+  - `driverPhysicsStep()` 替代 `physicsStep()`：车速只由油门/刹车推动，转速离合时自由升降、结合时跟车速走；GPS/手动滑块、车长语音在这个页面都不生效。离开驾驶员页面（切回整车或点别的角色）立刻改回调用 `physicsStep()`，行驶声音回到默认（GPS/手动）模式。
+- **炮手**：就是第二部分做的瞄准镜/开炮界面，`setRole('gunner')` 直接调 `enterScope()`。瞄准镜顶部的迷你角色栏点其他角色即是"退出瞄准镜"，具体收尾逻辑见 §2.1。
+- **换坦克的限制**：`canSwitchTank()` 要求 `activeRole === 'overview' && !running`——只有在整车页面、而且引擎已经熄火，底部坦克栏才能点（否则按钮 `disabled`，灰掉，`#tankNavHint` 会提示"回到整车页面并熄火才能换坦克"）。角色切换（`setRole`）、引擎启动/熄火（`$('start')`/`$('stop')` 的 `onclick`）之后都会重新调用 `buildTankNav()` 刷新这个状态。
 
 ### 3.2 还没做
 车长、通讯兵、装填手三个角色页面内容。车长可能对应现有的 Halt/Losfahren 口令触发逻辑（现在是自动触发，车长角色也许是让玩家手动按按钮喊话）；装填手可能是把 §1 的装填倒计时做成一个需要玩家主动操作的小游戏，而不是自动计时。这些现在都只是猜测，具体怎么做需要和用户再对一下。

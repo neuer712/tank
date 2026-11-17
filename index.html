@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
 <title>坦克驾驶模拟器</title>
-<link rel="stylesheet" href="styles.css?v=0.1.0">
+<link rel="stylesheet" href="styles.css?v=0.2.0">
 </head>
 <body>
   <div class="role-nav" id="roleNav">
@@ -40,17 +40,28 @@
     </div>
 
     <div id="pageDriver" class="hidden" style="width:100%;display:flex;flex-direction:column;align-items:center;gap:14px">
-      <div class="pedal-row">
-        <button class="pedal clutch" id="pedClutch">离合器</button>
-        <button class="pedal brake" id="pedBrake">刹车</button>
-        <button class="pedal throttle" id="pedThrottle">油门</button>
-      </div>
-      <div class="gear-row">
-        <button class="gear-btn on" data-gear="0">N</button>
-        <button class="gear-btn" data-gear="1">1</button>
-        <button class="gear-btn" data-gear="2">2</button>
-        <button class="gear-btn" data-gear="3">3</button>
-        <button class="gear-btn" data-gear="4">4</button>
+      <div class="cockpit">
+        <div class="gear-stick">
+          <button class="gear-btn" data-gear="4">4</button>
+          <button class="gear-btn" data-gear="3">3</button>
+          <button class="gear-btn" data-gear="2">2</button>
+          <button class="gear-btn" data-gear="1">1</button>
+          <button class="gear-btn on" data-gear="0">N</button>
+        </div>
+        <div class="lever-group">
+          <div class="lever clutch" id="leverClutch">
+            <div class="lever-track"><div class="lever-handle"></div></div>
+            <label>离合</label>
+          </div>
+          <div class="lever brake" id="leverBrake">
+            <div class="lever-track"><div class="lever-handle"></div></div>
+            <label>刹车</label>
+          </div>
+          <div class="lever throttle" id="leverThrottle">
+            <div class="lever-track"><div class="lever-handle"></div></div>
+            <label>油门</label>
+          </div>
+        </div>
       </div>
       <div class="scope-status" id="driverStatus"></div>
     </div>
@@ -64,12 +75,21 @@
   <div id="status">点“启动引擎”后允许定位。保持屏幕常亮、本页在前台。</div>
 
   <div class="tank-nav" id="tankNav"></div>
+  <div class="tank-nav-hint" id="tankNavHint"></div>
 
   <div id="scopeView" class="scope-overlay hidden">
     <div class="scope-top">
+      <div class="role-nav mini">
+        <button class="role-btn" data-role="overview">🚗<span>整车</span></button>
+        <button class="role-btn" data-role="commander" disabled>🎖️<span>车长</span></button>
+        <button class="role-btn" data-role="driver">🕹️<span>驾驶员</span></button>
+        <button class="role-btn on" data-role="gunner">🎯<span>炮手</span></button>
+        <button class="role-btn" data-role="radio" disabled>📻<span>通讯兵</span></button>
+        <button class="role-btn" data-role="loader" disabled>📦<span>装填手</span></button>
+      </div>
       <span id="scopeSysName">—</span>
-      <button class="scope-exit" id="scopeExit">退出瞄准镜</button>
     </div>
+    <div class="scope-zoom" id="scopeZoom"></div>
     <div class="scope-stage" id="scopeStage">
       <div class="scope-circle">
         <video id="scopeVideo" autoplay playsinline muted></video>
@@ -81,6 +101,6 @@
     <div class="scope-bottom" id="scopeBottom"></div>
   </div>
 
-<script src="app.js?v=0.1.0"></script>
+<script src="app.js?v=0.2.0"></script>
 </body>
 </html>

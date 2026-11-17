@@ -3,7 +3,7 @@ const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
 
 // 页面上显示这个号，用来确认手机加载的是不是最新部署（而不是缓存的旧 app.js）。
 // 改完功能记得顺手改这里，同时把 index.html 里 app.js/styles.css 的 ?v= 也改成一样的号。
-const APP_VERSION = '0.1.0';
+const APP_VERSION = '0.2.0';
 const verEl = $('ver'); if (verEl) verEl.textContent = 'v' + APP_VERSION;
 
 // ================= tuning =================
@@ -589,7 +589,11 @@ const TANKS = {
 const TANK_SLOTS = ['type59', 'sdkfz222', 'tiger', 'maus', 'amx50', 'twin57', 'sherman'];   // 底部坦克切换栏的顺序
 let currentTankId = 'type59'; try { currentTankId = localStorage.getItem('tankId') || currentTankId; } catch (e) {}
 
+// 只有整车模式 + 熄火才能换车：换坦克意味着重接声音 bus、重建武器状态，
+// 行驶中或者在驾驶员/炮手页面里换车容易把正在进行的事情搞乱。
+function canSwitchTank() { return activeRole === 'overview' && !running; }
 function selectTank(id) {
+  if (!canSwitchTank()) return;
   const t = TANKS[id]; if (!t) return;
   currentTankId = id;
   try { localStorage.setItem('tankId', id); } catch (e) {}
@@ -601,14 +605,17 @@ function selectTank(id) {
 }
 function buildTankNav() {
   const box = $('tankNav'); if (!box) return;
+  const can = canSwitchTank();
   box.innerHTML = '';
   TANK_SLOTS.forEach(id => {
     const btn = document.createElement('button');
     btn.className = 'tank-slot' + (id === currentTankId ? ' on' : '');
     btn.textContent = TANKS[id].label;
+    btn.disabled = !can;
     btn.onclick = () => selectTank(id);
     box.appendChild(btn);
   });
+  $('tankNavHint').textContent = can ? '' : '回到整车页面并熄火才能换坦克';
 }
 
 function initWeaponSystem(id) {
@@ -729,19 +736,25 @@ function stopFireTimer(role) { clearInterval(fireTimers[role]); fireTimers[role]
 function stopAllFireTimers() { for (const r in fireTimers) stopFireTimer(r); }
 // 手机浏览器长按容易把 pointerup/pointercancel 吞掉（iOS 的长按呼出菜单会抢走手势，
 // 或手指在小按钮上轻微滑动触发 pointerleave），导致连发定时器/踏板状态永远没人清掉。
-// bindPress() 是所有“按住生效、松手停止”控件（开火键、油门/刹车/离合器踏板）共用的
-// 健壮实现：pointerdown 时用 setPointerCapture 把后续事件锁死在按钮上，并把 end()
-// 注册进全局兜底列表——只要 window 收到任何 pointerup/pointercancel，或者页面切后台/
-// 失焦，所有正在按住的控件都会被强制松开，不会有漏掉释放事件导致“卡住”的情况。
+// bindPress() 是所有“按住生效、松手停止”控件（开火键、离合器）共用的健壮实现：
+// pointerdown 时用 setPointerCapture 把后续事件锁死在按钮上，记住这次按下的 pointerId，
+// 并把 end() 注册进全局兜底列表——只要 window 收到任何 pointerup/pointercancel，就按
+// pointerId 去匹配，只松开真正对应那个手指的控件，不会一个手指松开就把另一个手指正按
+// 着的控件也弹开（这是能不能单手踩离合、另一只手挂挡的关键：必须支持多点触控）。
+// 页面切后台/失焦时无法分辨是哪个手指了，这种情况才不分 pointerId 地强制全部松开。
 let pressFailsafes = [];
 function bindPress(el, onStart, onEnd) {
-  let active = false;
+  let pid = null;
   const start = e => {
     e.preventDefault();
     try { el.setPointerCapture(e.pointerId); } catch (err) {}
-    if (!active) { active = true; onStart(); }
+    if (pid === null) { pid = e.pointerId; onStart(); }
   };
-  const end = () => { if (active) { active = false; onEnd(); } };
+  const end = e => {
+    if (pid === null) return;
+    if (e && e.pointerId !== undefined && e.pointerId !== pid) return;   // 不是按下这个控件的那个手指
+    pid = null; onEnd();
+  };
   el.addEventListener('pointerdown', start);
   el.addEventListener('pointerup', end);
   el.addEventListener('pointerleave', end);
@@ -749,8 +762,8 @@ function bindPress(el, onStart, onEnd) {
   el.addEventListener('contextmenu', e => e.preventDefault());
   pressFailsafes.push(end);
 }
-window.addEventListener('pointerup', () => pressFailsafes.forEach(f => f()));
-window.addEventListener('pointercancel', () => pressFailsafes.forEach(f => f()));
+window.addEventListener('pointerup', e => pressFailsafes.forEach(f => f(e)));
+window.addEventListener('pointercancel', e => pressFailsafes.forEach(f => f(e)));
 window.addEventListener('blur', () => pressFailsafes.forEach(f => f()));
 document.addEventListener('visibilitychange', () => { if (document.hidden) pressFailsafes.forEach(f => f()); });
 
@@ -779,24 +792,30 @@ function updateGunStatusText() {
     return isFinite(g.ammo) ? `${g.def.label} ${g.ammo}/${g.def.magSize}` : `${g.def.label} 待发`;
   }).join(' · ');
 }
+const ZOOM_LEVELS = [1, 2.5, 5];
+let zoomFactor = 1;
 async function enterScope() {
+  if (aiming) return;   // 顶部迷你角色栏里再点一下炮手图标，不用重新开一次摄像头
   activeRole = 'gunner';
   document.querySelectorAll('.role-btn').forEach(b => b.classList.toggle('on', b.dataset.role === 'gunner'));
   aiming = true;
   motionSince = null; preRev = 0;   // 举手机瞄准时的晃动不该被当成”车辆起步”去推高转速
+  zoomFactor = 1; buildZoomButtons();
   $('scopeView').classList.remove('hidden');
   $('scopeStatus').textContent = '正在打开后置摄像头…';
   try {
     scopeStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
     $('scopeVideo').srcObject = scopeStream;
+    applyZoom();
   } catch (e) {
     $('scopeStatus').textContent = '无法打开后置摄像头：' + e.message;
   }
   updateGunStatusText();
   scopeRAF = requestAnimationFrame(scopeFrame);
 }
-function exitScope() {
-  const wasAiming = aiming;
+// 纯粹的硬件收尾：关相机、停连发、停震屏动画——不处理角色要不要切回整车。
+// setRole() 从炮手切到别的角色时直接调它；exitScope() 也调它，再按情况决定要不要切角色。
+function stopScopeHardware() {
   aiming = false;
   motionSince = null; preRev = 0;
   $('scopeView').classList.add('hidden');
@@ -804,9 +823,40 @@ function exitScope() {
   stopAllFireTimers();
   if (scopeRAF) cancelAnimationFrame(scopeRAF); scopeRAF = null;
   $('scopeStage').style.transform = '';
+}
+function exitScope() {
+  const wasAiming = aiming;
+  stopScopeHardware();
   // 只有真的在瞄准、且走的是"炮手"这条路进来的才需要把角色切回整车——
   // selectTank() 切坦克时也会调用这个函数防御性地关相机，那时不该打断驾驶员页面。
   if (wasAiming && activeRole === 'gunner') setRole('overview');
+}
+// 变焦：1x/2.5x/5x。优先用相机硬件变焦（部分安卓 Chrome 支持
+// MediaStreamTrack.getCapabilities().zoom），不支持就退化成 CSS scale() 数码变焦。
+function buildZoomButtons() {
+  const box = $('scopeZoom'); if (!box) return;
+  box.innerHTML = '';
+  ZOOM_LEVELS.forEach(z => {
+    const btn = document.createElement('button');
+    btn.className = 'zoom-btn' + (z === zoomFactor ? ' on' : '');
+    btn.textContent = z + '×';
+    btn.onclick = () => { zoomFactor = z; buildZoomButtons(); applyZoom(); };
+    box.appendChild(btn);
+  });
+}
+function applyZoom() {
+  const track = scopeStream && scopeStream.getVideoTracks()[0];
+  let hw = false;
+  if (track && track.getCapabilities) {
+    try {
+      const caps = track.getCapabilities();
+      if (caps.zoom) {
+        track.applyConstraints({ advanced: [{ zoom: clamp(zoomFactor, caps.zoom.min, caps.zoom.max) }] }).catch(() => {});
+        hw = true;
+      }
+    } catch (e) {}
+  }
+  $('scopeVideo').style.transform = hw ? 'scale(1)' : `scale(${zoomFactor})`;
 }
 // 每个武器系统单独保存一种瞄准镜图样（WEAPON_SYSTEMS[id].reticle），这里按名字分发到
 // 对应的绘制函数；没有专门图样的武器系统退回到通用十字瞄准镜。
@@ -1065,12 +1115,23 @@ function checkVoiceEvents(nowS) {
 // 整车(overview) 页面用 GPS/手动滑块模拟"自动驾驶"；驾驶员页面是真的在开——
 // 不挂挡、不给油就不会走，离合不分离换挡会打齿轮。离开驾驶员页面后，物理
 // 计算切回 physicsStep()，行驶声音回到默认（GPS/手动）模式。
+// 油门/刹车/离合是三个竖直推杆（有量的 0..1，不是开关），挡位移到左手侧——
+// 右手操作推杆更符合直觉。`navigator.maxTouchPoints` 判断手机是否支持真正的
+// 多点触控：支持的话松开离合器会缓慢回位（配合另一只手挂挡）；不支持的话
+// 离合器就停在松手的位置不动（单指设备没法一边按着离合一边去点别的按钮，
+// 让它停在原地至少还能完成换挡）。油门/刹车不管支不支持多点触控，松手都
+// 立刻回零——它们不需要"保持"。
+const MULTITOUCH = (navigator.maxTouchPoints || 0) >= 2;
 let activeRole = 'overview';
-let drv = { throttle: 0, brake: 0, clutch: false, gear: 0, throttleHeld: false, brakeHeld: false };
+let drv = { throttle: 0, brake: 0, clutch: 0, gear: 0, throttleTarget: 0, brakeTarget: 0, clutchTarget: 0, clutchReleasing: false };
 function driverPhysicsStep(dt) {
-  drv.throttle += ((drv.throttleHeld ? 1 : 0) - drv.throttle) * clamp(dt / 0.15, 0, 1);
-  drv.brake    += ((drv.brakeHeld    ? 1 : 0) - drv.brake)    * clamp(dt / 0.10, 0, 1);
-  const engaged = !drv.clutch && drv.gear > 0;
+  drv.throttle += (drv.throttleTarget - drv.throttle) * clamp(dt / 0.05, 0, 1);
+  drv.brake    += (drv.brakeTarget    - drv.brake)    * clamp(dt / 0.05, 0, 1);
+  const clutchTc = drv.clutchReleasing ? 0.6 : 0.03;      // 缓慢抬起 vs 跟手指走
+  drv.clutch += (drv.clutchTarget - drv.clutch) * clamp(dt / clutchTc, 0, 1);
+  if (drv.clutchReleasing && Math.abs(drv.clutch - drv.clutchTarget) < 0.01) drv.clutchReleasing = false;
+
+  const engaged = drv.clutch < 0.5 && drv.gear > 0;
   if (engaged) {
     const target = GEAR_TOP[drv.gear] * drv.throttle;
     const accel = clamp((target - speedKmh) * 0.9, -MAX_ACCEL * 3, MAX_ACCEL);
@@ -1090,7 +1151,7 @@ function driverPhysicsStep(dt) {
 }
 function shiftTo(g) {
   if (!ctx) return;
-  if (!drv.clutch) { grindGears(); return; }
+  if (drv.clutch < 0.5) { grindGears(); return; }
   if (g !== drv.gear) { drv.gear = g; gearShift(true); }
   document.querySelectorAll('.gear-btn').forEach(b => b.classList.toggle('on', +b.dataset.gear === drv.gear));
 }
@@ -1103,25 +1164,63 @@ function grindGears() {
 }
 function updateDriverStatus() {
   $('driverStatus').textContent =
-    `挡位 ${drv.gear === 0 ? 'N' : drv.gear} · 离合${drv.clutch ? '分离' : '结合'} · ` +
+    `挡位 ${drv.gear === 0 ? 'N' : drv.gear} · 离合 ${Math.round(drv.clutch * 100)}% · ` +
     `油门 ${Math.round(drv.throttle * 100)}% · 刹车 ${Math.round(drv.brake * 100)}%`;
+  paintLever('leverClutch', drv.clutch);
+  paintLever('leverBrake', drv.brake);
+  paintLever('leverThrottle', drv.throttle);
+}
+function paintLever(id, v) {
+  const h = document.querySelector(`#${id} .lever-handle`); if (!h) return;
+  h.style.top = `calc(${v * 100}% - ${v * h.offsetHeight}px)`;
+}
+// 竖直推杆：在轨道上按住/拖动设定 0..1 的量，不是单纯的按住/松开开关。
+// pid 隔离确保多点触控下一个手指拖油门不会影响另一个手指正按着的离合器。
+function bindLever(trackEl, onChange, onRelease) {
+  let pid = null;
+  const valueFromEvent = e => {
+    const r = trackEl.getBoundingClientRect();
+    return clamp((e.clientY - r.top) / r.height, 0, 1);
+  };
+  const start = e => {
+    e.preventDefault();
+    try { trackEl.setPointerCapture(e.pointerId); } catch (err) {}
+    if (pid === null) { pid = e.pointerId; onChange(valueFromEvent(e)); }
+  };
+  const move = e => { if (e.pointerId === pid) onChange(valueFromEvent(e)); };
+  const end = e => {
+    if (pid === null) return;
+    if (e && e.pointerId !== undefined && e.pointerId !== pid) return;
+    pid = null; onRelease();
+  };
+  trackEl.addEventListener('pointerdown', start);
+  trackEl.addEventListener('pointermove', move);
+  trackEl.addEventListener('pointerup', end);
+  trackEl.addEventListener('pointercancel', end);
+  trackEl.addEventListener('contextmenu', e => e.preventDefault());
+  pressFailsafes.push(end);
 }
 function setRole(r) {
   if (r === 'gunner') { enterScope(); return; }   // 炮手 = 刚做好的瞄准镜/开炮界面
+  if (activeRole === 'gunner' && r !== 'gunner') stopScopeHardware();   // 从炮手切走：关相机/停连发
   activeRole = r;
   $('pageOverview').classList.toggle('hidden', r !== 'overview');
   $('pageDriver').classList.toggle('hidden', r !== 'driver');
   document.querySelectorAll('.role-btn').forEach(b => b.classList.toggle('on', b.dataset.role === r));
-  if (r !== 'driver') { drv.throttleHeld = false; drv.brakeHeld = false; drv.clutch = false; }
+  if (r !== 'driver') { drv.throttleTarget = 0; drv.brakeTarget = 0; drv.clutchTarget = 0; drv.clutchReleasing = false; }
+  buildTankNav();   // 只有整车+熄火才能换坦克，角色一变就重新算一下按钮能不能点
 }
 document.querySelectorAll('.role-btn').forEach(b => { if (!b.disabled) b.onclick = () => setRole(b.dataset.role); });
-bindPress($('pedThrottle'), () => { drv.throttleHeld = true; $('pedThrottle').classList.add('active'); },
-                             () => { drv.throttleHeld = false; $('pedThrottle').classList.remove('active'); });
-bindPress($('pedBrake'), () => { drv.brakeHeld = true; $('pedBrake').classList.add('active'); },
-                          () => { drv.brakeHeld = false; $('pedBrake').classList.remove('active'); });
-bindPress($('pedClutch'), () => { drv.clutch = true; $('pedClutch').classList.add('active'); },
-                           () => { drv.clutch = false; $('pedClutch').classList.remove('active'); });
 document.querySelectorAll('.gear-btn').forEach(b => b.onclick = () => shiftTo(+b.dataset.gear));
+bindLever(document.querySelector('#leverThrottle .lever-track'),
+  v => { drv.throttleTarget = v; paintLever('leverThrottle', v); },
+  () => { drv.throttleTarget = 0; });
+bindLever(document.querySelector('#leverBrake .lever-track'),
+  v => { drv.brakeTarget = v; paintLever('leverBrake', v); },
+  () => { drv.brakeTarget = 0; });
+bindLever(document.querySelector('#leverClutch .lever-track'),
+  v => { drv.clutchTarget = v; drv.clutchReleasing = false; paintLever('leverClutch', v); },
+  () => { if (MULTITOUCH) { drv.clutchTarget = 0; drv.clutchReleasing = true; } });   // 不支持多点触控：保持在松手的位置
 
 // ================= schedulers =================
 function scheduleClanks() { scheduleTrack(ctx.currentTime, 0.12, speedKmh); }
@@ -1206,6 +1305,7 @@ $('start').onclick = async () => {
   startGps(); keepAwake();
   startedAt = performance.now() / 1000;
   enableMotion(motionPerm);
+  buildTankNav();   // 引擎跑起来了，坦克栏要变灰——只有熄火才能换车
 };
 $('stop').onclick = () => {
   running = false;
@@ -1218,8 +1318,8 @@ $('stop').onclick = () => {
   try { wakeLock && wakeLock.release(); } catch (e) {}
   $('controls').classList.add('hidden');
   $('start').classList.remove('hidden');
+  buildTankNav();   // 熄火了，坦克栏恢复能点（前提是当前还在整车页面）
 };
-$('scopeExit').onclick = exitScope;
 // 发动机/履带声音不再由玩家单独切换——固定由当前选中的坦克(TANKS)决定。
 function setEngineMode(m) {
   if (m === 'sample' && ctx && !engines.sample) m = 'classic';   // files missing

@@ -30,19 +30,32 @@
   .tank-slot { flex:1 1 calc(25% - 6px); min-width:72px; background:var(--panel); color:var(--fg);
                border-radius:10px; padding:10px 2px; font-size:12px; }
   .tank-slot.on { background:var(--acc); color:#111; }
-  .pedal-row { display:flex; gap:10px; width:100%; max-width:420px; }
-  .pedal { flex:1; height:84px; border-radius:14px; font-size:15px; font-weight:800; color:#fff;
-           user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; touch-action:none; }
-  .pedal.throttle { background:#3a6a1a; }
-  .pedal.brake { background:#8a2a1a; }
-  .pedal.clutch { background:#2a3a6a; }
-  .pedal.active { filter:brightness(1.4); }
-  .gear-row { display:flex; gap:8px; width:100%; max-width:420px; }
-  .gear-btn { flex:1; padding:14px 0; font-size:16px; background:var(--panel); color:var(--fg); }
+  .tank-slot:disabled { opacity:.35; }
+  .tank-nav-hint { font-size:11px; opacity:.55; text-align:center; min-height:1.2em; }
+
+  /* 驾驶员页面：挡位在左手侧，三个竖直推杆在右手侧 */
+  .cockpit { display:flex; gap:14px; width:100%; max-width:420px; align-items:flex-start; justify-content:center; }
+  .gear-stick { display:flex; flex-direction:column; gap:6px; }
+  .gear-stick .gear-btn { width:56px; padding:12px 0; font-size:15px; background:var(--panel); color:var(--fg); }
   .gear-btn.on { background:var(--acc); color:#111; }
-  .scope-overlay { position:fixed; inset:0; background:#000; z-index:50; display:flex; flex-direction:column; align-items:center; justify-content:space-between; padding:14px; gap:10px; }
-  .scope-top { width:100%; max-width:520px; display:flex; justify-content:space-between; align-items:center; color:#ddd; font-size:13px; }
-  .scope-exit { width:auto; padding:8px 14px; font-size:13px; background:#333; color:#ccc; border-radius:10px; }
+  .lever-group { flex:1; display:flex; gap:12px; justify-content:center; }
+  .lever { display:flex; flex-direction:column; align-items:center; gap:6px; }
+  .lever-track { position:relative; width:48px; height:180px; background:var(--panel); border-radius:14px;
+                 touch-action:none; overflow:hidden; }
+  .lever-handle { position:absolute; left:3px; top:0; width:42px; height:42px; border-radius:11px; background:#666; }
+  .lever.clutch .lever-handle { background:#4a5a9a; }
+  .lever.brake .lever-handle { background:#8a2a1a; }
+  .lever.throttle .lever-handle { background:#3a6a1a; }
+  .lever label { font-size:12px; opacity:.7; }
+
+  .scope-overlay { position:fixed; inset:0; background:#000; z-index:50; display:flex; flex-direction:column; align-items:center; justify-content:space-between; padding:14px; gap:8px; }
+  .scope-top { width:100%; max-width:520px; display:flex; flex-direction:column; align-items:center; gap:4px; color:#ddd; font-size:12px; }
+  .role-nav.mini { max-width:460px; }
+  .role-nav.mini .role-btn { padding:4px 1px 5px; font-size:14px; }
+  .role-nav.mini .role-btn span { font-size:8px; }
+  .scope-zoom { display:flex; gap:8px; }
+  .zoom-btn { width:auto; padding:6px 14px; font-size:13px; font-weight:600; background:var(--panel); color:var(--fg); border-radius:10px; }
+  .zoom-btn.on { background:var(--acc); color:#111; }
   .scope-stage { position:relative; width:min(92vw,520px); aspect-ratio:1; will-change:transform; }
   .scope-circle { width:100%; height:100%; border-radius:50%; overflow:hidden; position:relative; background:#111;
                   border:4px solid #30331f; box-shadow:0 0 0 3px #000, inset 0 0 50px rgba(0,0,0,.85); }
