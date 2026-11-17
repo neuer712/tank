@@ -9,7 +9,7 @@
 <body x-data>
   <div class="role-nav" id="roleNav">
     <template x-for="r in $store.ui.ROLES" :key="r.id">
-      <button class="role-btn" :class="{on: $store.ui.activeRole === r.id}" :disabled="!r.enabled"
+      <button class="role-btn" :data-role="r.id" :class="{on: $store.ui.activeRole === r.id}" :disabled="!r.enabled"
               @click="$store.ui.setRole(r.id)">
         <i x-text="r.icon"></i><span x-text="r.label"></span>
       </button>
@@ -44,7 +44,7 @@
       <div class="cockpit">
         <div class="gear-stick">
           <template x-for="g in [4,3,2,1,0]" :key="g">
-            <button class="gear-btn" :class="{on: $store.ui.drv.gear === g}" @click="$store.ui.shiftTo(g)" x-text="g === 0 ? 'N' : g"></button>
+            <button class="gear-btn" :data-gear="g" :class="{on: $store.ui.drv.gear === g}" @click="$store.ui.shiftTo(g)" x-text="g === 0 ? 'N' : g"></button>
           </template>
         </div>
         <div class="lever-group">
@@ -75,7 +75,7 @@
 
   <div class="tank-nav" id="tankNav">
     <template x-for="t in $store.ui.TANK_SLOTS" :key="t.id">
-      <button class="tank-slot" :class="{on: t.id === $store.ui.currentTankId}" :disabled="!$store.ui.canSwitchTank"
+      <button class="tank-slot" :data-tank="t.id" :class="{on: t.id === $store.ui.currentTankId}" :disabled="!$store.ui.canSwitchTank"
               @click="$store.ui.selectTank(t.id)" x-text="t.label"></button>
     </template>
   </div>
@@ -85,7 +85,7 @@
     <div class="scope-top">
       <div class="role-nav mini">
         <template x-for="r in $store.ui.ROLES" :key="r.id">
-          <button class="role-btn" :class="{on: $store.ui.activeRole === r.id}" :disabled="!r.enabled"
+          <button class="role-btn" :data-role="r.id" :class="{on: $store.ui.activeRole === r.id}" :disabled="!r.enabled"
                   @click="$store.ui.setRole(r.id)">
             <i x-text="r.icon"></i><span x-text="r.label"></span>
           </button>
@@ -95,7 +95,7 @@
     </div>
     <div class="scope-zoom" id="scopeZoom">
       <template x-for="z in $store.ui.ZOOM_LEVELS" :key="z">
-        <button class="zoom-btn" :class="{on: z === $store.ui.zoomFactor}" @click="$store.ui.setZoom(z)" x-text="z + '×'"></button>
+        <button class="zoom-btn" :data-zoom="z" :class="{on: z === $store.ui.zoomFactor}" @click="$store.ui.setZoom(z)" x-text="z + '×'"></button>
       </template>
     </div>
     <div class="scope-stage" id="scopeStage" :style="`transform: ${$store.ui.scopeTransform}`">
@@ -108,7 +108,7 @@
     <div class="scope-status" x-text="$store.ui.scopeStatusText"></div>
     <div class="scope-bottom" id="scopeBottom">
       <template x-for="slot in $store.ui.gunsUi" :key="slot.role">
-        <button class="fire-btn" :class="{coax: slot.role === 'coax', reloading: slot.reloading}"
+        <button class="fire-btn" :data-role="slot.role" :class="{coax: slot.role === 'coax', reloading: slot.reloading}"
                 x-text="slot.label" x-init="bindFireButton($el, slot.role)"></button>
       </template>
     </div>

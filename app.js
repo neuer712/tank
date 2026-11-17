@@ -611,7 +611,10 @@ const ZOOM_LEVELS = [1, 2.5, 5];
 // 必须等 Alpine 触发 'alpine:init' 事件才能调 Alpine.store()——这是 Alpine 文档推荐的
 // 注册时机，发生在 Alpine 真正开始处理 x-for/x-text 之前，比猜脚本执行顺序可靠。
 document.addEventListener('alpine:init', () => {
-  ui = Alpine.store('ui', {
+  // Alpine.store(name, obj) 是"注册"调用，不返回东西（只有一参数的 getter 形式
+  // Alpine.store(name) 才会把刚注册的响应式对象传回来）——漏了这一步，ui 一直是
+  // undefined，所有读 ui.xxx 的地方全部炸掉，这也是启动引擎按钮点不动的真正原因。
+  Alpine.store('ui', {
     ROLES: [
       { id: 'overview',  icon: '🚗', label: '整车',  enabled: true },
       { id: 'commander', icon: '🎖️', label: '车长',  enabled: false },
@@ -688,6 +691,7 @@ document.addEventListener('alpine:init', () => {
       if (this.mode === 'man') realKmh = +v;
     },
   });
+  ui = Alpine.store('ui');   // 一参数的 getter 形式，拿回刚注册的响应式对象
   ui.refreshTankGate();
   ui.selectTank(ui.currentTankId);
   bindLevers();
