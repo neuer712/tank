@@ -4,7 +4,7 @@ let ui;   // Alpine.store('ui', {...})，真正赋值在文件末尾的 alpine:i
 
 // 页面上显示这个号，用来确认手机加载的是不是最新部署（而不是缓存的旧 app.js）。
 // 改完功能记得顺手改这里，同时把 index.html 里 app.js/styles.css 的 ?v= 也改成一样的号。
-const APP_VERSION = '0.2.6';
+const APP_VERSION = '0.2.7';
 const verEl = $('ver'); if (verEl) verEl.textContent = 'v' + APP_VERSION;
 
 // ================= tuning =================
@@ -1185,7 +1185,13 @@ const MULTITOUCH = (navigator.maxTouchPoints || 0) >= 2;
 // （质量大、速度平方）相对滚动阻力有多大——这才是"挡位越高衰减越慢"的真正来源：
 // 同样的车速衰减率，换算到高挡位（每转对应的车速更高）上，转速衰减率天然更小
 // （除以 GEAR_TOP[gear] 的结果），不需要额外再按挡位加系数。
-const COAST_RESIST = 0.45;    // km/h/s：结合、不给油也不刹车时的匀减速（滚阻+发动机内摩擦）
+const COAST_RESIST = 0.2;     // km/h/s：和挡位、油门都无关的纯滚动阻力
+// 发动机制动：关油门时发动机自身的摩擦/泵气损失经变速箱传到车轮上——挡位越低、
+// 机械增益越大，这个效应越明显（除以 GEAR_TOP[gear]，挡位数字越小除出来越大）；
+// 油门开得越大，这部分阻力越小（真实发动机节气门全开时泵气损失趋近于 0）。
+// 用 (1-throttle) 这个系数保证"踩油门绝不会比不踩油门减速更快"——因为算加速度时
+// 这是单独减掉的一项，踩油门只会让它变小，不会反过来变大。
+const ENGINE_BRAKE_COEF = 3;
 const FREE_REV_FALL = 900;    // 不结合（空挡/踩离合）时只是发动机自己空转，没有整车动能拖着，
                                // 松油门转速降得比结合时快得多——这时候才是"转速自己的惯性"
 const CLUTCH_FLOOR_THRESH = 0.8; // 推杆值 >= 这个才算"踩到底"
@@ -1218,18 +1224,18 @@ function driverPhysicsStep(dt) {
   const lugging = engaged && impliedRpm < IDLE_RPM * 0.92;
   const torque = lugging ? clamp(impliedRpm / IDLE_RPM, 0.12, 1) : 1;
   if (engaged) {
-    if (drv.throttle > 0.02) {
-      const target = GEAR_TOP[drv.gear] * drv.throttle;
-      const accel = clamp((target - speedKmh) * 0.9 * torque, -MAX_ACCEL * 3, MAX_ACCEL * torque);
-      speedKmh = Math.max(0, speedKmh + accel * dt);
-    } else {
-      // 松油门但离合还结合着：车的动能通过变速箱拖着发动机转，不会像踩刹车那样
-      // 速降——只有滚动阻力和发动机内摩擦这点小阻力，车速（从而转速）缓缓往下掉。
-      speedKmh = Math.max(0, speedKmh - COAST_RESIST * dt);
-    }
+    // 驱动力：只负责"往油门对应的目标速度追"，钳在 >= 0——这一项永远不刹车，
+    // 刹车的活全交给下面单独算的发动机制动 + 滚动阻力，这样两者才能正确叠加，
+    // 不会出现"油门和阻力公式打架，小油门反而比不踩油门减速更快"的问题。
+    const target = GEAR_TOP[drv.gear] * drv.throttle;
+    const driveAccel = clamp((target - speedKmh) * 0.9 * torque, 0, MAX_ACCEL * torque);
+    const engineBrake = ENGINE_BRAKE_COEF * (1 - drv.throttle) / GEAR_TOP[drv.gear];
+    const accel = clamp(driveAccel - engineBrake - COAST_RESIST, -MAX_ACCEL * 3, MAX_ACCEL);
+    speedKmh = Math.max(0, speedKmh + accel * dt);
+  } else {
+    speedKmh = Math.max(0, speedKmh - COAST_RESIST * 0.5 * dt);   // 不结合时没有发动机制动，只剩滚阻
   }
-  speedKmh = Math.max(0, speedKmh - drv.brake * 8 * dt);   // 刹车
-  if (!engaged) speedKmh = Math.max(0, speedKmh - COAST_RESIST * 0.5 * dt);  // 不结合时没有发动机内摩擦，但滚阻还在
+  speedKmh = Math.max(0, speedKmh - drv.brake * 8 * dt);   // 脚刹车，和上面的发动机制动是两回事
   curGear = drv.gear;
 
   const demand = clamp(0.08 + drv.throttle * 0.92, 0, 1);
