@@ -4,7 +4,7 @@ let ui;   // Alpine.store('ui', {...})，真正赋值在文件末尾的 alpine:i
 
 // 页面上显示这个号，用来确认手机加载的是不是最新部署（而不是缓存的旧 app.js）。
 // 改完功能记得顺手改这里，同时把 index.html 里 app.js/styles.css 的 ?v= 也改成一样的号。
-const APP_VERSION = '0.2.4';
+const APP_VERSION = '0.2.5';
 const verEl = $('ver'); if (verEl) verEl.textContent = 'v' + APP_VERSION;
 
 // ================= tuning =================
@@ -1179,10 +1179,10 @@ function checkVoiceEvents(nowS) {
 // 让它停在原地至少还能完成换挡）。油门/刹车不管支不支持多点触控，松手都
 // 立刻回零——它们不需要"保持"。
 const MULTITOUCH = (navigator.maxTouchPoints || 0) >= 2;
-const DRIVER_RPM_FALL = 700;     // 坦克发动机飞轮重，松油门转速掉得比自动模式(RPM_FALL)慢得多
+const DRIVER_RPM_FALL = 320;     // 坦克发动机飞轮重，松油门转速要缓缓掉，不是应声掉下来
 const CLUTCH_FLOOR_THRESH = 0.8; // 推杆值 >= 这个才算"踩到底"
 const CLUTCH_FLOOR_HOLD = 1.0;   // s：踩到底松手后，先停在原地这么久再回位，留时间挂挡
-const LUG_FLOOR = IDLE_RPM * 0.25;   // 发动机快熄火了也不让转速真掉到 0，否则没法恢复
+const LUG_FLOOR = IDLE_RPM * 0.25;   // 2 挡及以上真闷车了也不让转速掉到 0，否则没法恢复
 let nextChug = 0;
 function driverPhysicsStep(dt) {
   const drv = ui.drv;
@@ -1202,7 +1202,11 @@ function driverPhysicsStep(dt) {
   const engaged = drv.clutch < 0.5 && drv.gear > 0;
   // 离合结合、挡位挂太高、车速又太低时，发动机被车轮硬拖着转，转速会被拖到怠速以下——
   // 真实车这时候是在"闷车"：动力骤减、发出吭哧吭哧的闯动声，而不是顺畅地继续加速。
-  const impliedRpm = engaged ? clamp(speedKmh / GEAR_TOP[drv.gear] * MAX_RPM, LUG_FLOOR, MAX_RPM) : null;
+  // 但 1 挡是起步挡，不能也按这个逻辑掉到怠速以下——现实里起步靠离合器打滑垫着，
+  // 发动机转速不会跟着蠕行的车速一起趴下去；没有这条，1 挡从静止起步也会被判成
+  // 闷车、动力打折，车就死循环起不来了（哪个挡都不让起步，那还怎么开车）。
+  const rpmFloor = drv.gear === 1 ? IDLE_RPM : LUG_FLOOR;
+  const impliedRpm = engaged ? clamp(speedKmh / GEAR_TOP[drv.gear] * MAX_RPM, rpmFloor, MAX_RPM) : null;
   const lugging = engaged && impliedRpm < IDLE_RPM * 0.92;
   const torque = lugging ? clamp(impliedRpm / IDLE_RPM, 0.12, 1) : 1;
   if (engaged) {
