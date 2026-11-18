@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
 <title>坦克驾驶模拟器</title>
-<link rel="stylesheet" href="styles.css?v=0.2.3">
+<link rel="stylesheet" href="styles.css?v=0.2.4">
 </head>
 <body x-data>
   <div class="role-nav" id="roleNav">
@@ -27,9 +27,8 @@
 
   <button id="start" :disabled="$store.ui.startDisabled" x-show="!$store.ui.controlsVisible">启动引擎</button>
 
-  <div id="controls" style="width:100%;display:flex;flex-direction:column;align-items:center;gap:14px"
-       x-show="$store.ui.controlsVisible">
-    <div x-show="$store.ui.activeRole === 'overview'" style="width:100%;display:flex;flex-direction:column;align-items:center;gap:14px">
+  <div id="controls" class="flex-col" x-show="$store.ui.controlsVisible">
+    <div x-show="$store.ui.activeRole === 'overview'" class="flex-col">
       <div class="seg">
         <button :class="{on: $store.ui.mode === 'gps'}" @click="$store.ui.setMode('gps')">GPS 车速</button>
         <button :class="{on: $store.ui.mode === 'man'}" @click="$store.ui.setMode('man')">手动测试</button>
@@ -40,7 +39,7 @@
       </div>
     </div>
 
-    <div x-show="$store.ui.activeRole === 'driver'" style="width:100%;display:flex;flex-direction:column;align-items:center;gap:14px">
+    <div x-show="$store.ui.activeRole === 'driver'" class="flex-col">
       <div class="cockpit">
         <div class="gear-stick">
           <template x-for="g in [4,3,2,1,0]" :key="g">
@@ -116,7 +115,7 @@
 
 <!-- app.js 必须先于 alpine.min.js 加载：它要先把 alpine:init 的监听器挂上，
      Alpine 的 cdn 版脚本一执行就会同步触发 start()/alpine:init，顺序反了就注册不到 store。 -->
-<script src="app.js?v=0.2.3" defer></script>
+<script src="app.js?v=0.2.4" defer></script>
 <script src="alpine.min.js" defer></script>
 </body>
 </html>

@@ -12,6 +12,11 @@
   .card small { opacity:.6; font-size:12px; }
   button { font:inherit; border:0; border-radius:14px; padding:16px; font-size:18px; font-weight:700; cursor:pointer; width:100%; max-width:420px; }
   #start { background:var(--acc); color:#111; font-size:22px; padding:22px; }
+  /* 专门给同时用了 x-show 又要用 flex 布局的元素：x-show 显示时如果 inline style
+     不是"只有 display 一条"，Alpine 会用 removeProperty('display') 而不是整个
+     removeAttribute('style')，display 就再也回不来了——所以 flex 相关的属性都放
+     样式表里，别和 x-show 混进同一个 inline style。 */
+  .flex-col { width:100%; display:flex; flex-direction:column; align-items:center; gap:14px; }
   .seg { display:flex; width:100%; max-width:420px; background:var(--panel); border-radius:12px; overflow:hidden; }
   .seg button { border-radius:0; background:transparent; color:var(--fg); padding:12px; font-size:15px; }
   .seg button.on { background:var(--acc); color:#111; }

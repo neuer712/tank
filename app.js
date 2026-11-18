@@ -4,7 +4,7 @@ let ui;   // Alpine.store('ui', {...})，真正赋值在文件末尾的 alpine:i
 
 // 页面上显示这个号，用来确认手机加载的是不是最新部署（而不是缓存的旧 app.js）。
 // 改完功能记得顺手改这里，同时把 index.html 里 app.js/styles.css 的 ?v= 也改成一样的号。
-const APP_VERSION = '0.2.3';
+const APP_VERSION = '0.2.4';
 const verEl = $('ver'); if (verEl) verEl.textContent = 'v' + APP_VERSION;
 
 // ================= tuning =================
@@ -1354,10 +1354,16 @@ document.addEventListener('visibilitychange', () => {
 });
 
 // ================= UI =================
+// 熄火后用 setTimeout 延迟 ctx.suspend()（留时间让 master 音量淡出），如果用户在这个
+// setTimeout 触发前就重新点了"启动引擎"，这个延迟调用还留着——新引擎音效好好播着，
+// 几百毫秒后这个迟到的 ctx.suspend() 一来，整个音频上下文被挂起，所有声音瞬间消失。
+// 必须记住这个定时器，重新启动时清掉。
+let suspendTimer = null;
 $('start').onclick = async () => {
   // iOS asks for motion permission; must be requested directly inside the tap
   const motionPerm = (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function')
     ? DeviceMotionEvent.requestPermission().catch(() => 'denied') : Promise.resolve('granted');
+  if (suspendTimer) { clearTimeout(suspendTimer); suspendTimer = null; }
   ui.startDisabled = true;
   await ensureAudio();
   running = true;
@@ -1385,7 +1391,8 @@ $('stop').onclick = () => {
   let tail = 0;
   if (engineMode === 'sample' && engines.sample) tail = engines.sample.stop(ctx.currentTime) || 0;
   master.gain.setTargetAtTime(0, ctx.currentTime + tail, 0.3);
-  setTimeout(() => ctx.suspend(), (tail + 1.5) * 1000);
+  if (suspendTimer) clearTimeout(suspendTimer);
+  suspendTimer = setTimeout(() => { ctx.suspend(); suspendTimer = null; }, (tail + 1.5) * 1000);
   try { wakeLock && wakeLock.release(); } catch (e) {}
   ui.controlsVisible = false;
   ui.refreshTankGate();   // 熄火了，坦克栏恢复能点（前提是当前还在整车页面）
