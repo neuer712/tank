@@ -4,7 +4,7 @@ let ui;   // Alpine.store('ui', {...})，真正赋值在文件末尾的 alpine:i
 
 // 页面上显示这个号，用来确认手机加载的是不是最新部署（而不是缓存的旧 app.js）。
 // 改完功能记得顺手改这里，同时把 index.html 里 app.js/styles.css 的 ?v= 也改成一样的号。
-const APP_VERSION = '0.2.5';
+const APP_VERSION = '0.2.6';
 const verEl = $('ver'); if (verEl) verEl.textContent = 'v' + APP_VERSION;
 
 // ================= tuning =================
@@ -1179,7 +1179,15 @@ function checkVoiceEvents(nowS) {
 // 让它停在原地至少还能完成换挡）。油门/刹车不管支不支持多点触控，松手都
 // 立刻回零——它们不需要"保持"。
 const MULTITOUCH = (navigator.maxTouchPoints || 0) >= 2;
-const DRIVER_RPM_FALL = 320;     // 坦克发动机飞轮重，松油门转速要缓缓掉，不是应声掉下来
+// 离合结合时发动机和车轮是硬连接——转速不是"自己按某个速率往回掉"的独立量，
+// 它就是车速按挡位比换算出来的数（impliedRpm），两者同涨同跌。松油门之后转速
+// 降得快不快，取决于车速本身降得快不快；而车速降得快不快，取决于坦克的动能
+// （质量大、速度平方）相对滚动阻力有多大——这才是"挡位越高衰减越慢"的真正来源：
+// 同样的车速衰减率，换算到高挡位（每转对应的车速更高）上，转速衰减率天然更小
+// （除以 GEAR_TOP[gear] 的结果），不需要额外再按挡位加系数。
+const COAST_RESIST = 0.45;    // km/h/s：结合、不给油也不刹车时的匀减速（滚阻+发动机内摩擦）
+const FREE_REV_FALL = 900;    // 不结合（空挡/踩离合）时只是发动机自己空转，没有整车动能拖着，
+                               // 松油门转速降得比结合时快得多——这时候才是"转速自己的惯性"
 const CLUTCH_FLOOR_THRESH = 0.8; // 推杆值 >= 这个才算"踩到底"
 const CLUTCH_FLOOR_HOLD = 1.0;   // s：踩到底松手后，先停在原地这么久再回位，留时间挂挡
 const LUG_FLOOR = IDLE_RPM * 0.25;   // 2 挡及以上真闷车了也不让转速掉到 0，否则没法恢复
@@ -1210,18 +1218,27 @@ function driverPhysicsStep(dt) {
   const lugging = engaged && impliedRpm < IDLE_RPM * 0.92;
   const torque = lugging ? clamp(impliedRpm / IDLE_RPM, 0.12, 1) : 1;
   if (engaged) {
-    const target = GEAR_TOP[drv.gear] * drv.throttle;
-    const accel = clamp((target - speedKmh) * 0.9 * torque, -MAX_ACCEL * 3, MAX_ACCEL * torque);
-    speedKmh = Math.max(0, speedKmh + accel * dt);
+    if (drv.throttle > 0.02) {
+      const target = GEAR_TOP[drv.gear] * drv.throttle;
+      const accel = clamp((target - speedKmh) * 0.9 * torque, -MAX_ACCEL * 3, MAX_ACCEL * torque);
+      speedKmh = Math.max(0, speedKmh + accel * dt);
+    } else {
+      // 松油门但离合还结合着：车的动能通过变速箱拖着发动机转，不会像踩刹车那样
+      // 速降——只有滚动阻力和发动机内摩擦这点小阻力，车速（从而转速）缓缓往下掉。
+      speedKmh = Math.max(0, speedKmh - COAST_RESIST * dt);
+    }
   }
-  speedKmh = Math.max(0, speedKmh - (drv.brake * 8 + 0.1) * dt);   // 刹车 + 滚动阻力，离合/空挡时也生效
+  speedKmh = Math.max(0, speedKmh - drv.brake * 8 * dt);   // 刹车
+  if (!engaged) speedKmh = Math.max(0, speedKmh - COAST_RESIST * 0.5 * dt);  // 不结合时没有发动机内摩擦，但滚阻还在
   curGear = drv.gear;
 
   const demand = clamp(0.08 + drv.throttle * 0.92, 0, 1);
-  const rpmT = engaged
-    ? impliedRpm
-    : IDLE_RPM + drv.throttle * (MAX_RPM - IDLE_RPM) * 0.85;       // 空挡/踩离合：自由升转，不受车速牵制
-  engRpm += clamp(rpmT - engRpm, -DRIVER_RPM_FALL * dt, RPM_RISE * dt * (engaged ? 1 : 1.8));
+  if (engaged) {
+    engRpm = impliedRpm;   // 硬连接：转速就是车速换算出来的数，没有独立于车速之外的"转速惯性"
+  } else {
+    const rpmT = IDLE_RPM + drv.throttle * (MAX_RPM - IDLE_RPM) * 0.85;   // 空挡/踩离合：自由升转，不受车速牵制
+    engRpm += clamp(rpmT - engRpm, -FREE_REV_FALL * dt, RPM_RISE * dt * 1.8);
+  }
   load += (demand - load) * 0.15;
   realKmh = speedKmh / SPEED_SCALE;   // 仅用于显示，驾驶员页面不读 GPS/陀螺仪
 
