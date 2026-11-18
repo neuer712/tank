@@ -4,7 +4,7 @@ let ui;   // Alpine.store('ui', {...})，真正赋值在文件末尾的 alpine:i
 
 // 页面上显示这个号，用来确认手机加载的是不是最新部署（而不是缓存的旧 app.js）。
 // 改完功能记得顺手改这里，同时把 index.html 里 app.js/styles.css 的 ?v= 也改成一样的号。
-const APP_VERSION = '0.2.7';
+const APP_VERSION = '0.2.8';
 const verEl = $('ver'); if (verEl) verEl.textContent = 'v' + APP_VERSION;
 
 // ================= tuning =================
@@ -125,7 +125,7 @@ async function createEngine(ctx, dest, noiseBuf) {
     await ctx.audioWorklet.addModule(url);
     node = new AudioWorkletNode(ctx, 'diesel', { numberOfInputs: 0, numberOfOutputs: 2, outputChannelCount: [1, 1] });
   } catch (e) { console.warn('worklet failed, using fallback engine', e); }
-  if (!node) return createClassicEngine(ctx, out);
+  if (!node) return createClassicEngine(ctx, out);   // fallback 顶上 'cyl' 这个槛位；kind 字段没人读（只在三个引擎构造函数里各自声明），不用跟着改
 
   // combustion pulses -> hull/body resonance + exhaust resonance -> grit -> tone
   const hp = mk('highpass', 28, 0.7);
@@ -463,9 +463,8 @@ async function loadSfx() {
 function updateAudio(r, ld = load) {
   const now = ctx.currentTime;
   if (now >= engineReadyAt) {
-    let rpm = 0;
-    for (const k in engines) if (engines[k]) rpm = engines[k].set(r, ld, now, 0.08);
-    ui.rpm = Math.round(rpm / 10) * 10;
+    const e = engines[engineMode];   // 只更新真正在响的那一个引擎——另外两个的 AudioParam 排程是白做的，20 次/秒全程浪费
+    if (e) ui.rpm = Math.round(e.set(r, ld, now, 0.08) / 10) * 10;
   }
   updateLoops(now, speedKmh);
 }
@@ -642,7 +641,7 @@ document.addEventListener('alpine:init', () => {
     driverStatusText: '',
 
     // 坦克栏
-    currentTankId: (() => { try { return localStorage.getItem('tankId') || 'type59'; } catch (e) { return 'type59'; } })(),
+    currentTankId: (() => { try { const id = localStorage.getItem('tankId'); return (id && TANKS[id]) ? id : 'type59'; } catch (e) { return 'type59'; } })(),   // 存的 id 要是已经不在 TANKS 里了（比如改名/删除），别把一个查不到的 id 传给 selectTank()——那样它会直接 return，炮手页面永远建不起来
     canSwitchTank: true,
     tankNavHint: '',
 
@@ -659,7 +658,9 @@ document.addEventListener('alpine:init', () => {
     },
     setRole(r) {
       if (r === 'gunner') { enterScope(); return; }   // 炮手 = 瞄准镜/开炮界面
+      scopeEpoch++;   // 让还卡在 enterScope() 的 await 里的那次进入过期——不然用户已经点走了，迟到的回调还会把界面抢回瞄准镜
       if (this.activeRole === 'gunner' && r !== 'gunner') stopScopeHardware();   // 从炮手切走：关相机/停连发
+      if (this.activeRole === 'driver' && r !== 'driver') { stateA = false; stateB = false; zeroSince = null; }   // 离开驾驶员页面：清掉车长口令的旧武装状态，别让驾驶员页面自己跑出来的车速回整车页面的第一个 tick 就被当成真实车速触发一句"出发了/停车了"
       this.activeRole = r;
       if (r !== 'driver') { this.drv.throttleTarget = 0; this.drv.brakeTarget = 0; this.drv.clutchTarget = 0; this.drv.clutchReleasing = false; }
       if (r === 'driver') { motionSince = null; preRev = 0; }   // 驾驶员页面转速完全交给油门推杆，别留着体感起步的残留状态
@@ -678,13 +679,13 @@ document.addEventListener('alpine:init', () => {
     shiftTo(g) {
       if (!ctx) return;
       if (this.drv.clutch < 0.5) { grindGears(); return; }
-      if (g !== this.drv.gear) { this.drv.gear = g; gearShift(true); }
+      if (g !== this.drv.gear) { gearShift(g > this.drv.gear); this.drv.gear = g; }   // 方向要在改 drv.gear 之前算，不然永远是 g > g
     },
     setZoom(z) { this.zoomFactor = z; applyZoom(); },
     setMode(m) {
       this.mode = m;
+      if (this.statusText.startsWith('GPS 信号丢失')) this.statusText = '';   // 切模式（不管切到哪个）都该清掉这条过期提示，不是只有切回 gps 才清——否则切到手动模式后这句话会永远挂着
       if (m === 'man') realKmh = +this.manVal;
-      else if (this.statusText.startsWith('GPS 信号丢失')) this.statusText = '';
     },
     setManVal(v) {
       this.manVal = +v;
@@ -695,7 +696,13 @@ document.addEventListener('alpine:init', () => {
   ui.refreshTankGate();
   ui.selectTank(ui.currentTankId);
   bindLevers();
-  setInterval(() => updateGuns(0.05), 50);   // 装填倒计时独立于 loopTimer，和引擎开没开无关
+  let lastGunsAt = 0;
+  setInterval(() => {   // 跟 loop() 的 dt 一样用真实经过时间——标签页被节流/切到后台时这个定时器也不会按时触发，固定 0.05 会让装填比真实时间慢
+    const nowS = performance.now() / 1000;
+    const dt = lastGunsAt ? clamp(nowS - lastGunsAt, 0, 0.5) : 0.05;
+    lastGunsAt = nowS;
+    updateGuns(dt);
+  }, 50);   // 装填倒计时独立于 loopTimer，和引擎开没开无关
 });
 
 function initWeaponSystem(id) {
@@ -806,6 +813,7 @@ function flashScope(intensity) {
 // 开火按钮/变焦按钮不再手动 createElement+appendChild 拼 DOM——index.html 里用
 // Alpine 的 x-for 按 ui.gunsUi / ui.ZOOM_LEVELS 声明式渲染，这里只负责逻辑。
 let scopeStream = null, scopeRAF = null, fireTimers = {};
+let scopeEpoch = 0;   // 每次真的想进瞄准镜就 +1；enterScope() 在每个 await 之后检查自己是不是还是最新这次，防止用户在建音频/要摄像头权限的等待期里切走角色后，迟到的回调把界面抢回瞄准镜
 function stopFireTimer(role) { clearInterval(fireTimers[role]); fireTimers[role] = null; }
 function stopAllFireTimers() { for (const r in fireTimers) stopFireTimer(r); }
 // 手机浏览器长按容易把 pointerup/pointercancel 吞掉（iOS 的长按呼出菜单会抢走手势，
@@ -833,13 +841,22 @@ function bindPress(el, onStart, onEnd) {
   el.addEventListener('pointerup', end);
   el.addEventListener('pointerleave', end);
   el.addEventListener('pointercancel', end);
+  el.addEventListener('lostpointercapture', end);
   el.addEventListener('contextmenu', e => e.preventDefault());
-  pressFailsafes.push(end);
+  pressFailsafes.push({ el, end });
 }
-window.addEventListener('pointerup', e => pressFailsafes.forEach(f => f(e)));
-window.addEventListener('pointercancel', e => pressFailsafes.forEach(f => f(e)));
-window.addEventListener('blur', () => pressFailsafes.forEach(f => f()));
-document.addEventListener('visibilitychange', () => { if (document.hidden) pressFailsafes.forEach(f => f()); });
+// 坦克/武器系统切换会让 Alpine 按 key 销毁重建开火按钮（比如双 57 的 main2 跟其他车的
+// coax 对不上号），每次重建都会再 push 一个新闭包进来，旧的从来没人删——于是这里不是
+// 直接 forEach，而是先把元素已经不在文档里的旧条目过滤掉，让数组大小跟"当前页面上
+// 还活着的控件数"保持一致，不会跟着来回切坦克无限长下去。
+function runPressFailsafes(e) {
+  pressFailsafes = pressFailsafes.filter(f => document.contains(f.el));
+  pressFailsafes.forEach(f => f.end(e));
+}
+window.addEventListener('pointerup', runPressFailsafes);
+window.addEventListener('pointercancel', runPressFailsafes);
+window.addEventListener('blur', () => runPressFailsafes());
+document.addEventListener('visibilitychange', () => { if (document.hidden) runPressFailsafes(); });
 
 function bindFireButton(el, role) {
   const fireOnce = () => tryFireGun(role, performance.now() / 1000);
@@ -856,7 +873,7 @@ function bindFireButton(el, role) {
 function updateGunStatusText() {
   const sys = WEAPON_SYSTEMS[weaponSysId]; if (!sys) return;
   ui.gunsUi.forEach(g => { g.reloading = gunStates[g.role].reloading; });
-  if (!ui.aiming) return;
+  if (!ui.aiming || !scopeStream) return;   // 摄像头还没连上/连接失败时，别用弹药状态文字盖掉"正在打开…"或报错文案
   ui.scopeStatusText = sys.guns.map(slot => {
     const g = gunStates[slot.role];
     if (g.reloading) return `${g.def.label} 装填中 ${Math.max(0, g.reloadLeft).toFixed(1)}s`;
@@ -865,19 +882,26 @@ function updateGunStatusText() {
 }
 async function enterScope() {
   if (ui.aiming) return;   // 顶部迷你角色栏里再点一下炮手图标，不用重新开一次摄像头
+  const epoch = ++scopeEpoch;   // 记住这是第几次"想进瞄准镜"
+  const stale = () => epoch !== scopeEpoch;   // 每个 await 之后都要查一遍：这次 enterScope() 是不是已经被后来的角色切换作废了
   await ensureAudio();   // 开炮不该依赖"有没有启动引擎"：炮手一进来就把音频系统建好/唤醒
+  if (stale()) return;   // 等音频系统建好的这段时间里，用户已经切到别的角色了——不要再抢界面
   ui.activeRole = 'gunner';
   ui.aiming = true;
   motionSince = null; preRev = 0;   // 举手机瞄准时的晃动不该被当成”车辆起步”去推高转速
   ui.zoomFactor = 1;
   ui.scopeStatusText = '正在打开后置摄像头…';
   try {
-    scopeStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
+    if (stale()) { stream.getTracks().forEach(tr => tr.stop()); return; }   // 等摄像头权限的这段时间里也切走了，别点亮相机
+    scopeStream = stream;
     $('scopeVideo').srcObject = scopeStream;
     applyZoom();
   } catch (e) {
+    if (stale()) return;
     ui.scopeStatusText = '无法打开后置摄像头：' + e.message;
   }
+  if (stale()) return;
   updateGunStatusText();
   scopeRAF = requestAnimationFrame(scopeFrame);
   ui.refreshTankGate();
@@ -887,6 +911,7 @@ async function enterScope() {
 function stopScopeHardware() {
   ui.aiming = false;
   motionSince = null; preRev = 0;
+  shakeAmp = 0;   // 不清掉的话，刚开炮就退出瞄准镜，下次再进来会先看到一下残留的震屏
   if (scopeStream) { scopeStream.getTracks().forEach(tr => tr.stop()); scopeStream = null; }
   stopAllFireTimers();
   if (scopeRAF) cancelAnimationFrame(scopeRAF); scopeRAF = null;
@@ -901,18 +926,22 @@ function exitScope() {
 }
 // 变焦：1x/2.5x/5x。优先用相机硬件变焦（部分安卓 Chrome 支持
 // MediaStreamTrack.getCapabilities().zoom），不支持就退化成 CSS scale() 数码变焦。
-function applyZoom() {
+let zoomEpoch = 0;
+async function applyZoom() {
+  const epoch = ++zoomEpoch;   // 快速连点 1x/2.5x/5x 时，几次 applyConstraints 的 await 谁先谁后完成不保证——
+                                // 只让"最后一次点的那次"真正写 transform，不然画面可能停在不是最新一次选的档位上
   const track = scopeStream && scopeStream.getVideoTracks()[0];
   let hw = false;
   if (track && track.getCapabilities) {
     try {
       const caps = track.getCapabilities();
       if (caps.zoom) {
-        track.applyConstraints({ advanced: [{ zoom: clamp(ui.zoomFactor, caps.zoom.min, caps.zoom.max) }] }).catch(() => {});
-        hw = true;
+        await track.applyConstraints({ advanced: [{ zoom: clamp(ui.zoomFactor, caps.zoom.min, caps.zoom.max) }] });
+        hw = true;   // 只有真的 applyConstraints 成功了才算硬件变焦——部分安卓机型会报能力但应用失败，这时要退回数码变焦，不能两头都不生效
       }
     } catch (e) {}
   }
+  if (epoch !== zoomEpoch) return;   // 等硬件变焦生效的这段时间里用户又点了别的倍数，这次的结果已经过期
   $('scopeVideo').style.transform = hw ? 'scale(1)' : `scale(${ui.zoomFactor})`;
 }
 // 每个武器系统单独保存一种瞄准镜图样（WEAPON_SYSTEMS[id].reticle），这里按名字分发到
@@ -984,8 +1013,12 @@ function scopeFrame() {
   ui.scopeTransform = shakeAmp
     ? `translate(${(Math.random() * 2 - 1) * shakeAmp * 16}px, ${(Math.random() * 2 - 1) * shakeAmp * 16}px) rotate(${(Math.random() * 2 - 1) * shakeAmp * 1.2}deg)`
     : '';
+  // cv.width 是整数、getBoundingClientRect().width 几乎总是带小数——直接比较基本永远不相等，
+  // 会导致每一帧都重设 canvas 尺寸（即使"新尺寸"其实没变），而设置 width/height 必定清空重分配
+  // 画布的底层位图，等于每帧都在做一次不必要的显存分配，手机上尤其费电。两边都取整再比。
   const cv = $('scopeCanvas'), rect = cv.parentElement.getBoundingClientRect();
-  if (cv.width !== rect.width) { cv.width = rect.width; cv.height = rect.height; }
+  const w = Math.round(rect.width), h = Math.round(rect.height);
+  if (cv.width !== w) { cv.width = w; cv.height = h; }
   drawReticle(cv);
   updateGunStatusText();
   scopeRAF = requestAnimationFrame(scopeFrame);
@@ -1198,6 +1231,7 @@ const CLUTCH_FLOOR_THRESH = 0.8; // 推杆值 >= 这个才算"踩到底"
 const CLUTCH_FLOOR_HOLD = 1.0;   // s：踩到底松手后，先停在原地这么久再回位，留时间挂挡
 const LUG_FLOOR = IDLE_RPM * 0.25;   // 2 挡及以上真闷车了也不让转速掉到 0，否则没法恢复
 let nextChug = 0;
+let grindMsgUntil = 0;   // “没踩离合器”提示至少停留这么久，不被下一个 50ms tick 的常规状态行覆盖掉
 function driverPhysicsStep(dt) {
   const drv = ui.drv;
   drv.throttle += (drv.throttleTarget - drv.throttle) * clamp(dt / 0.05, 0, 1);
@@ -1265,8 +1299,10 @@ function grindGears() {
   noiseHit(t, 0.18, 0.4, 'bandpass', 2200, 3);
   noiseHit(t + 0.05, 0.15, 0.3, 'bandpass', 1500, 4);
   ui.driverStatusText = '没踩离合器，挂不进挡！';
+  grindMsgUntil = performance.now() / 1000 + 0.8;
 }
 function updateDriverStatus() {
+  if (performance.now() / 1000 < grindMsgUntil) return;   // 刚打齿轮的提示还没到展示时长，先别被常规状态行盖掉
   const drv = ui.drv;
   ui.driverStatusText =
     `挡位 ${drv.gear === 0 ? 'N' : drv.gear} · 离合 ${Math.round(drv.clutch * 100)}% · ` +
@@ -1297,8 +1333,9 @@ function bindLever(trackEl, onChange, onRelease) {
   trackEl.addEventListener('pointermove', move);
   trackEl.addEventListener('pointerup', end);
   trackEl.addEventListener('pointercancel', end);
+  trackEl.addEventListener('lostpointercapture', end);   // 跟 bindPress 一样兜底系统手势把 pointerup/pointercancel 吞掉的情况；不用 pointerleave——拖拽时手指短暂越出这条窄轨道的边界不该被当成松手
   trackEl.addEventListener('contextmenu', e => e.preventDefault());
-  pressFailsafes.push(end);
+  pressFailsafes.push({ el: trackEl, end });
 }
 function bindLevers() {
   bindLever(document.querySelector('#leverThrottle .lever-track'),
@@ -1320,10 +1357,16 @@ function bindLevers() {
 // ================= schedulers =================
 function scheduleClanks() { scheduleTrack(ctx.currentTime, 0.12, speedKmh); }
 
+let lastLoopAt = 0;
 function loop() {
   const nowS = performance.now() / 1000;
+  // 用真实经过的时间而不是硬编码 0.05——setInterval 只是"最小间隔"，标签页被浏览器
+  // 节流/切到后台时，回调不会按时触发；用固定 0.05 会让物理和装填倒计时跑得比真实时间
+  // 快或慢。clamp 上限防止长时间挂起后回来时一步跳太猛。
+  const dt = lastLoopAt ? clamp(nowS - lastLoopAt, 0, 0.5) : 0.05;
+  lastLoopAt = nowS;
   const role = ui.activeRole;
-  const res = role === 'driver' ? driverPhysicsStep(0.05) : physicsStep(realKmh, nowS);
+  const res = role === 'driver' ? driverPhysicsStep(dt) : physicsStep(realKmh, nowS, dt);
   if (res.shift) gearShift(res.shift > 0);
   ui.gear = curGear === 0 ? 'N' : curGear;
   ui.spd = Math.round(speedKmh);
@@ -1331,7 +1374,7 @@ function loop() {
   if (role !== 'driver') checkVoiceEvents(nowS);   // 驾驶员页面是玩家自己开车，不触发车长语音
   // 炮手举着手机瞄准必然会晃；驾驶员页面转速已经由油门推杆直接控制——
   // 这两个场景都要完全关掉"体感起步"升转效果，不能只靠"手机有没有在动"去判断。
-  const pr = (ui.aiming || role === 'driver') ? 0 : motionStep(nowS, 0.05);
+  const pr = (ui.aiming || role === 'driver') ? 0 : motionStep(nowS, dt);
   let sr = res.r, sl = load;
   if (pr > 0) { sr = Math.max(sr, pr * PREREV_MAX_R); sl = Math.max(sl, 0.08 + pr * 0.3); }   // sound only
   ui.motionTag = pr > 0.3 ? ' · 体感起步' : '';
@@ -1414,6 +1457,7 @@ $('stop').onclick = () => {
   engineAudioOn = false;
   setEngineMode(engineMode);   // 把发动机轨道的增益带回 0——开炮声音不受影响，走的是 master 不是 engBus
   clearInterval(loopTimer); clearInterval(schedTimer);
+  lastLoopAt = 0;   // 下次启动时 loop() 的第一个 tick 要走"第一次调用"的默认 dt，不能拿这次熄火前的旧时间戳算出一个虚高的 dt
   if (watchId != null) navigator.geolocation.clearWatch(watchId);
   let tail = 0;
   if (engineMode === 'sample' && engines.sample) tail = engines.sample.stop(ctx.currentTime) || 0;
